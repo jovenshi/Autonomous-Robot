@@ -23,7 +23,8 @@ def _get_gpiochip():
                 "raspberrypi,bcm2835-gpio",
                 "raspberrypi,bcm2711-gpio",
             }:
-                return lgpio.gpiochip_open(int(dev.name[-1]))
+                chip_id = int(dev.name[len("gpiochip") :])
+                return lgpio.gpiochip_open(chip_id)
     # return chip0 as a fallback
     return lgpio.gpiochip_open(0)
 

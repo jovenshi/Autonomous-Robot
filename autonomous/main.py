@@ -1,0 +1,222 @@
+"""Robot entry point: build the system, run the 30 Hz control loop, shut down.
+
+Straight-driving build: front camera, lane fusion, lane controller,
+behaviour (IDLE / LANE_FOLLOW / SAFE_STOP) and the Sabertooth. The side
+camera, IMU, sign voter and display are added as they are written.
+
+Run from the robot/ folder:  python main.py
+    Enter            START  (again after SAFE_STOP: once to IDLE, once to drive)
+    s then Enter     STOP   (back to IDLE)
+    Ctrl-C           quit; motors are stopped first
+
+Test on a stand with the wheels off the ground before the first real run.
+"""
+import queue
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass, field
+
+import config
+from behavior.state_machine import Behaviour
+from control.command import drive_for_state
+from control.lane_controller import LaneController
+from control.mixer import mix
+from estimation.health import check_health
+from estimation.lane_fusion import fuse_lane
+from estimation.road_yaw import RoadYawTracker
+from hal.camera import CameraStream, CsiSource
+from hal.exposure import ExposureControl
+from hal.sabertooth import SabertoothDriver
+from perception.pipeline import process_front_frame
+from robot_types import LatestValue, State, UiCommand
+
+_LANE_STATES = (State.LANE_FOLLOW, State.APPROACH, State.REACQUIRE)
+
+
+@dataclass
+class System:
+    cfg: object
+    front_slot: LatestValue
+    signs_enabled: threading.Event
+    exposure_hold: threading.Event
+    front_cam: CameraStream
+    front_exposure: ExposureControl
+    saber: SabertoothDriver
+    lane_ctrl: LaneController
+    road_yaw: RoadYawTracker
+    behaviour: Behaviour
+    commands: queue.Queue
+    imu: object = None                    # ImuReader once written
+    prev_state: State = State.IDLE
+    overrun_times: deque = field(default_factory=deque)
+    last_warnings: tuple = ()
+    last_status_t: float = 0.0
+    last_drive: object = None
+
+
+# ---------------------------------------------------------------- build
+
+def build_system(cfg):
+    # Cameras first (they need warm-up), then the Sabertooth.
+    if cfg.FRONT_BANDS is None:
+        raise SystemExit("FRONT_BANDS is not set in config.py: run tools/calibrate.py first")
+    signs_enabled, exposure_hold = threading.Event(), threading.Event()
+    exposure_hold.set()                               # robot starts in IDLE
+    front_slot = LatestValue()
+    front_cam, front_exposure = _build_front_camera(cfg, front_slot, signs_enabled, exposure_hold)
+
+    saber = SabertoothDriver(cfg.SABER_PORT, cfg.SABER_BAUD, cfg.SABER_ADDRESS, cfg)
+    saber.open()
+    if saber.serial_error:
+        print("Warning: Sabertooth port did not open; the robot will SAFE_STOP when started")
+
+    commands = queue.Queue()
+    _start_keyboard(commands)
+    return System(
+        cfg=cfg, front_slot=front_slot, signs_enabled=signs_enabled,
+        exposure_hold=exposure_hold, front_cam=front_cam, front_exposure=front_exposure,
+        saber=saber, lane_ctrl=LaneController(cfg), road_yaw=RoadYawTracker(cfg),
+        behaviour=Behaviour(cfg, signs_enabled, exposure_hold), commands=commands,
+    )
+
+
+def _build_front_camera(cfg, slot, signs_enabled, exposure_hold):
+    # Starts the front camera thread and locks exposure after warm-up.
+    source = CsiSource(cfg.FRONT_CAM_NUM, cfg.FRONT_SIZE, cfg)
+    exposure = ExposureControl(source, "front", cfg)
+
+    def process(frame):
+        result = process_front_frame(frame, signs_enabled.is_set(), cfg)
+        exposure.manage_step(result.mean_v, exposure_hold.is_set())
+        return result
+
+    stream = CameraStream(source, process, slot, "front", cfg)
+    stream.start()
+    exposure.lock_after_warmup()
+    return stream, exposure
+
+
+def _start_keyboard(commands):
+    # Terminal stand-in for the display: Enter = START, "s" + Enter = STOP.
+    def read_keys():
+        while True:
+            try:
+                line = input()
+            except EOFError:
+                return
+            key = line.strip().lower()
+            commands.put(UiCommand.STOP if key == "s" else UiCommand.START)
+
+    threading.Thread(target=read_keys, name="keyboard", daemon=True).start()
+
+
+# ---------------------------------------------------------------- one loop
+
+def control_step(sys, now):
+    # Read slots -> fuse -> road yaw -> health -> behaviour -> drive -> mix -> Sabertooth.
+    cfg = sys.cfg
+    front = sys.front_slot.get()
+    lane = fuse_lane(front, None, now, cfg)
+    sys.road_yaw.update(sys.imu, lane, sys.behaviour.state, now)
+    road_yaw = sys.road_yaw.get() if sys.imu is not None else None
+    commands = _read_commands(sys.commands)
+
+    warnings = check_health(front, None, None, lane, road_yaw, {"front": sys.front_cam.fps()},
+                            _recent_overruns(sys, now), sys.saber.serial_error, now, cfg)
+    state = sys.behaviour.step(front, None, lane, road_yaw, None, None, commands,
+                               sys.saber.serial_error, now)
+    if state in _LANE_STATES and state != sys.prev_state:
+        sys.lane_ctrl.reset()
+
+    drive = drive_for_state(state, lane, None, sys.behaviour, sys.lane_ctrl, front, cfg)
+    sys.saber.set(mix(drive, cfg))                   # every loop, or the timeout stops the motors
+    sys.last_drive = drive
+    _report(sys, state, lane, warnings, now)
+    sys.prev_state = state
+
+
+def _read_commands(commands):
+    # Everything queued since the last loop, without blocking.
+    out = []
+    while True:
+        try:
+            out.append(commands.get_nowait())
+        except queue.Empty:
+            return out
+
+
+def _recent_overruns(sys, now):
+    while sys.overrun_times and now - sys.overrun_times[0] > sys.cfg.OVERRUN_WINDOW_S:
+        sys.overrun_times.popleft()
+    return len(sys.overrun_times)
+
+
+def _report(sys, state, lane, warnings, now):
+    # Terminal output until the display exists: state changes and warning
+    # changes at once, a status line every STATUS_PRINT_S.
+    if state != sys.prev_state:
+        reason = f" ({sys.behaviour.stop_reason})" if sys.behaviour.stop_reason else ""
+        print(f"State: {sys.prev_state.name} -> {state.name}{reason}")
+    names = tuple(w.name for w in warnings)
+    if names != sys.last_warnings:
+        print("Warnings: " + (", ".join(names) if names else "none"))
+        sys.last_warnings = names
+    if now - sys.last_status_t >= sys.cfg.STATUS_PRINT_S:
+        print(_status_line(sys, state, lane))
+        sys.last_status_t = now
+
+
+def _status_line(sys, state, lane):
+    lat = f"{lane.lateral_err_m * 1000:+6.1f} mm" if lane.lateral_err_m is not None else "   --   "
+    head = (f"{lane.heading_err_rad * 57.2958:+5.1f} deg"
+            if lane.heading_err_rad is not None else "  --    ")
+    drive = sys.last_drive
+    return (f"{state.name:<11} lat {lat}  head {head}  conf {lane.conf:.2f}  "
+            f"speed {drive.speed:.2f}  steer {drive.steer:+.2f}  "
+            f"fps {sys.front_cam.fps():4.1f}  cam errors {sys.front_cam.error_count}")
+
+
+# ---------------------------------------------------------------- loop and shutdown
+
+def run(sys):
+    # Fixed-rate loop at CONTROL_HZ. An overrun is counted and the schedule
+    # restarts from now rather than trying to catch up.
+    period = 1.0 / sys.cfg.CONTROL_HZ
+    next_t = time.monotonic()
+    while True:
+        control_step(sys, time.monotonic())
+        next_t += period
+        wait = next_t - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        else:
+            now = time.monotonic()
+            sys.overrun_times.append(now)
+            next_t = now
+
+
+def shutdown(sys):
+    # Motors first, then everything else; each step runs even if one fails.
+    for step in (sys.saber.stop, sys.saber.close, sys.front_cam.stop):
+        try:
+            step()
+        except Exception as e:
+            print(f"Shutdown: {step.__qualname__} failed: {e}")
+
+
+def main():
+    system = None
+    try:
+        system = build_system(config)
+        print("Ready. Enter = START, s + Enter = STOP, Ctrl-C = quit")
+        run(system)
+    except KeyboardInterrupt:
+        print("\nStopping")
+    finally:
+        if system is not None:
+            shutdown(system)
+
+
+if __name__ == "__main__":
+    main()

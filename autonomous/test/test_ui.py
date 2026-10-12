@@ -275,17 +275,26 @@ def test_send_never_blocks_with_ui_stalled():
     stalled = ctx.Process(target=time.sleep, args=(10,), daemon=True)
     stalled.start()
     packet = view_packet()
-    worst, start = 0.0, time.monotonic()
+    assert packet.front is not None                       # an image in every packet
+    times, start = [], time.monotonic()
     try:
         for i in range(1000):
             t0 = time.perf_counter()
             send(packet_q, packet)
-            worst = max(worst, time.perf_counter() - t0)
+            times.append(time.perf_counter() - t0)
             time.sleep(max(0.0, start + (i + 1) / 1000 - time.monotonic()))
     finally:
         stalled.kill()
-    assert worst < 0.005, f"slowest send {worst * 1000:.2f} ms"
+    assert_send_under_1ms(times)
     assert time.monotonic() - start < 2.0
+
+
+def assert_send_under_1ms(times):
+    # Target from the control loop budget (4 ms): send() p99 and max < 1 ms.
+    s = sorted(times)
+    p99, worst = s[int(len(s) * 0.99)], s[-1]
+    print(f"send(): p99 {p99 * 1e6:.0f} us, max {worst * 1e6:.0f} us")
+    assert p99 < 0.001 and worst < 0.001, f"p99 {p99 * 1e3:.3f} ms, max {worst * 1e3:.3f} ms"
 
 
 @pytest.fixture
@@ -306,13 +315,13 @@ def test_ui_process_runs_synthetic_packets_then_dies_unnoticed(headless):
         assert process.is_alive(), "display process crashed on synthetic packets"
         process.kill()                                     # killed mid-run
         process.join(2.0)
-        worst = 0.0
+        times, packet = [], view_packet()
         for loop in range(300):
             t0 = time.perf_counter()
-            send(packet_q, view_packet())
+            send(packet_q, packet)
+            times.append(time.perf_counter() - t0)
             assert read_commands(cmd_q) == []
-            worst = max(worst, time.perf_counter() - t0)
-        assert worst < 0.005, f"slowest send+read after kill {worst * 1000:.2f} ms"
+        assert_send_under_1ms(times)
     finally:
         stop_ui(process, config)
     assert not process.is_alive()

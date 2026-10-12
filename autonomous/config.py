@@ -114,7 +114,7 @@ STOP_HOLD_S = 3.0               # s
 
 # ---------------------------------------------------------------- speeds and lane control
 
-CRUISE_SPEED = 0.7              # 0-1
+CRUISE_SPEED = 0.6              # 0-1
 APPROACH_SPEED = 0.3
 CROSS_SPEED = 0.3
 REACQUIRE_SPEED = 0.3

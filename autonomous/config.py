@@ -34,7 +34,13 @@ CAM_FPS_WINDOW_S = 1.0          # s; window over which fps() is measured
 
 # MEASURED: 5 bands of (y_top, y_bottom, forward_m from the rear axle,
 # half_road_px, m_per_px); y values in FRONT_LANE_SIZE pixels.
-FRONT_BANDS = None
+FRONT_BANDS = [
+    (133, 149, 1.1471, 75, 0.002073),
+    (154, 170, 0.9941, 86, 0.001795),
+    (175, 191, 0.8774, 98, 0.001583),
+    (196, 212, 0.7854, 110, 0.001415),
+    (217, 233, 0.7109, 121, 0.00128),
+]
 
 SIDE_ROWS = (40, 80, 120, 160, 200)  # 5 rows spread over the side frame height
 SIDE_ROAD_ON_LEFT = None        # MEASURED: True if road appears on the image's left
@@ -68,17 +74,18 @@ DARK_WARN_V = 40                # 0-255
 BRIGHT_WARN_V = 220             # 0-255
 
 # ---------------------------------------------------------------- colour tests (TUNED)
-# OpenCV HSV: H 0-179, S and V 0-255
+# From the test
+YELLOW_H_MIN = 21
+YELLOW_H_MAX = 33
+YELLOW_S_MIN = 116
+YELLOW_V_MIN = 72
+ROAD_S_MAX = 106
+ROAD_V_T_MIN = 55
+ROAD_V_T_MAX = 158
 
-YELLOW_H_MIN = 20
-YELLOW_H_MAX = 35
-YELLOW_S_MIN = 90
-YELLOW_V_MIN = 60
 GREEN_CHROM_MIN = 0.40          # G / (R+G+B)
 DARK_SUM_MIN = 90               # R+G+B; below = too dark to judge
-ROAD_S_MAX = 70
-ROAD_V_T_MIN = 40               # clamp on the Otsu threshold
-ROAD_V_T_MAX = 110
+
 WHITE_S_MAX = 50
 WHITE_V_REL = 0.8               # ratio of the frame's bright percentile
 WHITE_V_PCT = 95                # percentile
@@ -107,15 +114,16 @@ STOP_HOLD_S = 3.0               # s
 
 # ---------------------------------------------------------------- speeds and lane control
 
-CRUISE_SPEED = 0.5              # 0-1
+CRUISE_SPEED = 0.7              # 0-1
 APPROACH_SPEED = 0.3
 CROSS_SPEED = 0.3
 REACQUIRE_SPEED = 0.3
 KP_LAT = 4.0                    # steer per m
 KH = 0.8                        # steer per rad
 KD_YAW = 0.004                  # steer per deg/s
-STEER_SMOOTH = 0.5              # 0 = none, near 1 = heavy
+STEER_SMOOTH = 0.7              # 0 = none, near 1 = heavy
 STEER_MAX = 0.6                 # steer
+LANE_STEER_SPEED_RATIO = 0.7    # lane |steer| <= this x speed; below 1 the inner wheel never reverses
 REACQUIRE_CONF = 0.6
 REACQUIRE_FRAMES = 5
 CAM_GAP_WARN_M = 0.03           # m
@@ -143,12 +151,20 @@ CROSS_TIMEOUT_S = 3.0           # s
 # ---------------------------------------------------------------- IMU and road yaw
 
 IMU_I2C_ADDR = 0x28
+IMU_YAW_SIGN = -1               # confirmed on the bench: BNO055 heading grows clockwise; -1 makes yaw + = left
+IMU_GYRO_SIGN = 1               # confirmed on the bench: gyro z is + counter-clockwise (chip flat, z up)
+IMU_MODE_SETTLE_S = 0.05        # s; wait after a mode change (course IMUDevice value)
+IMU_JOIN_TIMEOUT_S = 1.0        # s; close() waits this long for the IMU thread to exit
 IMU_MAX_RATE_DPS = 300          # deg/s
 IMU_MAX_REJECTS = 5             # samples
-IMU_STILL_S = 3.0               # s
-IMU_DRIFT_MAX_DPS = 0.5         # deg/s; set from tools/imu_drift_test.py
-IMU_DRIFT_WARN_DPS = 0.2        # deg/s; set from tools/imu_drift_test.py
+IMU_DRIFT_SETTLE_S = 0.5        # s; drift_request must be set this long before a window opens
+IMU_STILL_S = 2.0               # s; drift window; SETTLE + STILL must be < STOP_HOLD_S
+IMU_DRIFT_MAX_DPS = 0.1         # deg/s; bench drift ~0.001 (tools/imu_drift_test.py, motors off and on); higher = bumped
+IMU_DRIFT_WARN_DPS = 0.05       # deg/s; above the 0.031 one-step-per-window resolution (1/16 deg / IMU_STILL_S)
 IMU_CALIB_WAIT_S = 10           # s
+DRIFT_TEST_PRINT_HZ = 10        # Hz; tools/imu_drift_test.py status lines
+DRIFT_TEST_SPEED = 0.3          # 0-1; both wheels in --motors mode (robot on a stand)
+DRIFT_TEST_SIGN_MIN_DPS = 5.0   # deg/s; both rates above this before their signs are compared
 ROAD_YAW_ALPHA = 0.05           # blend per loop
 ROAD_YAW_MIN_CONF = 0.7         # conf
 ROAD_YAW_MAX_RATE_DPS = 10      # deg/s
@@ -163,10 +179,10 @@ SABER_TIMEOUT_MS = 200          # auto-stop; sent as 2 x 100 ms (course example 
 SABER_STARTUP_WAIT_S = 2.0      # s; wait after opening the port (course example value)
 SABER_READ_TIMEOUT_S = 0.1      # s; pyserial timeout (course example value)
 SABER_HW_DEADBAND = 5           # Sabertooth command 17; stored in the controller (course example value)
-LEFT_CHANNEL = 1                # CONFIRM on the bench
-RIGHT_CHANNEL = 2               # CONFIRM on the bench
-LEFT_INVERT = False             # CONFIRM on the bench
-RIGHT_INVERT = False            # CONFIRM on the bench
+LEFT_CHANNEL = 2                # confirmed on the bench
+RIGHT_CHANNEL = 1               # confirmed on the bench
+LEFT_INVERT = True              # confirmed on the bench
+RIGHT_INVERT = True             # confirmed on the bench
 STEER_GAIN = 1.0
 MOTOR_DEADBAND = 0.15           # 0-1; software lift so small commands still move the wheels
 
@@ -179,4 +195,6 @@ DISPLAY_SIZE = None             # CONFIRM: depends on the display model
 UI_START_VIEW = "split"
 CAM_FPS_MIN = 20                # fps
 STATUS_PRINT_S = 1.0            # s; terminal status line interval (until the display exists)
+LOOP_LOG_ENABLED = True         # one CSV row per control loop (loop_log.py)
+LOOP_LOG_DIR = "logs"            # relative to autonomous/; one file per run
 OVERRUN_WINDOW_S = 1.0          # s; overruns counted over this window for LOOP_OVERRUN

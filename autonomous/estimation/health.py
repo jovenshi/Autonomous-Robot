@@ -11,7 +11,7 @@ def check_health(front, side, imu, lane, road_yaw, fps, overruns, motor_error, n
     # overruns: control-loop overruns in the recent window (not a lifetime total).
     # motor_error: SabertoothDriver.serial_error.
     checks = (
-        (W.IMU_INVALID, _imu_invalid(imu)),
+        (W.IMU_INVALID, _imu_invalid(imu, now, cfg)),
         (W.IMU_NOT_CALIBRATED, _imu_not_calibrated(imu)),
         (W.IMU_DRIFT_HIGH, _imu_drift_high(imu, cfg)),
         (W.ROAD_YAW_STALE, _road_yaw_stale(road_yaw, now, cfg)),
@@ -26,8 +26,9 @@ def check_health(front, side, imu, lane, road_yaw, fps, overruns, motor_error, n
     return [warning for warning, failed in checks if failed]
 
 
-def _imu_invalid(imu):
-    return imu is not None and not imu.valid
+def _imu_invalid(imu, now, cfg):
+    # Failing reads, or a sample older than MAX_OBS_AGE_S (IMU thread stalled).
+    return imu is not None and (not imu.valid or now - imu.t > cfg.MAX_OBS_AGE_S)
 
 
 def _imu_not_calibrated(imu):

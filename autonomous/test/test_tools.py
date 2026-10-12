@@ -257,3 +257,126 @@ def test_replay_needs_bands(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "FRONT_BANDS", None)
     with pytest.raises(SystemExit):
         replay.run(str(tmp_path), speed=0, window=False, cfg=config)
+
+
+# ---------------------------------------------------------------- imu_drift_test
+
+from robot_types import ImuSample, MotorCmd  # noqa: E402
+from tools import imu_drift_test  # noqa: E402
+
+
+def imu_sample(yaw=0.0, rate=0.0, t=0.0, drift=0.0):
+    return ImuSample(yaw, rate, True, 3, drift, t)
+
+
+def test_yaw_change_per_second():
+    assert imu_drift_test.yaw_change_dps(imu_sample(yaw=12.0, t=1.1), imu_sample(yaw=10.0, t=1.0)) \
+        == pytest.approx(20.0)
+    assert imu_drift_test.yaw_change_dps(imu_sample(t=1.0), None) is None
+    assert imu_drift_test.yaw_change_dps(imu_sample(t=1.0), imu_sample(t=1.0)) is None
+
+
+@pytest.mark.parametrize("rate,change,flag", [
+    (20.0, 19.0, False),          # agree (turning left)
+    (-20.0, -19.0, False),        # agree (turning right)
+    (20.0, -19.0, True),          # disagree
+    (-20.0, 19.0, True),
+    (1.0, -19.0, False),          # gyro rate too small to judge
+    (20.0, -1.0, False),          # yaw change too small to judge
+    (20.0, None, False),          # no previous sample
+])
+def test_sign_mismatch(rate, change, flag):
+    assert imu_drift_test.sign_mismatch(rate, change, config) == flag
+
+
+def test_status_line_flags_mismatch():
+    line = imu_drift_test.status_line(imu_sample(yaw=5.0, rate=20.0), -19.0, True)
+    assert "SIGN MISMATCH" in line and "+20.00" in line and "-19.00" in line
+    assert "SIGN MISMATCH" not in imu_drift_test.status_line(imu_sample(), None, False)
+
+
+class FakeDriftSaber:
+    def __init__(self):
+        self.sent = []
+
+    def set(self, cmd):
+        self.sent.append(cmd)
+
+
+def test_report_feeds_motors_and_counts_mismatches(monkeypatch, capsys):
+    monkeypatch.setattr(config, "DRIFT_TEST_PRINT_HZ", 1000)
+    saber, run = FakeDriftSaber(), imu_drift_test.Run()
+    samples = iter([imu_sample(yaw=0.0, rate=20.0, t=0.0), imu_sample(yaw=-2.0, rate=20.0, t=0.1)])
+
+    class Slot:
+        def get(self):
+            return next(samples, None) or run.last
+
+    imu_drift_test.report(Slot(), saber, run, 0.02, config)
+    assert saber.sent and saber.sent[0] == MotorCmd(config.DRIFT_TEST_SPEED, config.DRIFT_TEST_SPEED)
+    assert run.first.t == 0.0 and run.mismatches == 1
+    assert "SIGN MISMATCH" in capsys.readouterr().out
+
+
+def test_summary():
+    run = imu_drift_test.Run(first=imu_sample(yaw=0.0, t=0.0),
+                             last=imu_sample(yaw=1.0, t=10.0, drift=0.05))
+    text = imu_drift_test.summary(run)
+    assert "+0.050" in text and "+1.00 deg" in text and "+0.100 deg/s" in text
+    assert imu_drift_test.summary(imu_drift_test.Run()) == "No IMU samples received"
+
+
+# ---------------------------------------------------------------- weave_report
+
+import datetime  # noqa: E402
+
+from loop_log import LoopLog  # noqa: E402
+from robot_types import DriveCmd, LaneEstimate, State  # noqa: E402
+from tools import weave_report  # noqa: E402
+
+
+def write_weave_log(directory):
+    # Known numbers. IDLE rows (huge error) must be ignored. Segment 1:
+    # lateral +/-10 mm, heading +/-0.02 rad, steer flips 3 times in 0.3 s.
+    # A SAFE_STOP row splits it from segment 2 (0.1 s, no lateral, no flips).
+    rows = [(0.0, State.IDLE, 0.5, 0.5, 0.0)]
+    for i, sign in enumerate((1, -1, 1, -1)):
+        rows.append((1.0 + i * 0.1, State.LANE_FOLLOW, sign * 0.01, sign * 0.02, sign * 0.1))
+    rows.append((1.4, State.SAFE_STOP, -0.01, 0.02, 0.0))
+    rows += [(2.0, State.LANE_FOLLOW, None, 0.02, 0.1), (2.1, State.LANE_FOLLOW, None, 0.02, 0.1)]
+    log = LoopLog(str(directory), config, start=datetime.datetime(2026, 10, 11, 16, 0, 0))
+    for t, state, lateral, heading, steer in rows:
+        log.write(t, state, LaneEstimate(lateral, heading, 0.9, None, t), None,
+                  DriveCmd(speed=0.7, steer=steer))
+    log.close()
+    return log.path
+
+
+def test_weave_report_known_numbers(tmp_path):
+    gains, rows = weave_report.read_log(write_weave_log(tmp_path))
+    assert gains["KD_YAW"] == str(config.KD_YAW)
+    s = weave_report.summarize(rows)
+    assert s["rows"] == 6
+    assert s["seconds"] == pytest.approx(0.4)
+    assert s["lat_rms_mm"] == pytest.approx(10.0)
+    assert s["lat_peak_mm"] == pytest.approx(10.0)
+    assert s["head_rms_deg"] == pytest.approx(math.degrees(0.02))
+    assert s["flips_per_s"] == pytest.approx(3 / 0.4)
+
+
+def test_weave_report_no_lane_follow_rows():
+    s = weave_report.summarize([{"t": "0", "state": "IDLE", "lateral_err_m": "0.1",
+                                 "heading_err_rad": "0", "steer": "0"}])
+    assert s["rows"] == 0 and s["lat_rms_mm"] is None and s["flips_per_s"] is None
+    assert "lat rms -- peak -- mm" in weave_report.format_line("x.csv", {}, s)
+
+
+def test_weave_report_one_line_per_log(tmp_path, monkeypatch, capsys):
+    a = write_weave_log(tmp_path / "a")
+    b = write_weave_log(tmp_path / "b")
+    monkeypatch.setattr(sys, "argv", ["weave_report", a, b])
+    weave_report.main()
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("run_20261011_160000.csv  KD_YAW=")
+    assert "lat rms 10.0 peak 10.0 mm" in lines[0] and "steer flips 7.50/s" in lines[0]

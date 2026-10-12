@@ -14,15 +14,21 @@ from robot_types import Action, SignType, State, UiCommand
 # States where the robot is moving and must keep seeing the lane.
 _LANE_STATES = (State.LANE_FOLLOW, State.APPROACH, State.REACQUIRE)
 _MOVING_STATES = _LANE_STATES + (State.TURN, State.CROSS)
+# States that steer from IMU yaw: a stale IMU stops the robot only here.
+_IMU_STEER_STATES = (State.TURN, State.CROSS)
+# States where the robot stands still long enough to measure gyro drift.
+_STILL_STATES = (State.IDLE, State.STOP_HOLD)
 
 
 class Behaviour:
-    def __init__(self, cfg, signs_enabled=None, exposure_hold=None):
+    def __init__(self, cfg, signs_enabled=None, exposure_hold=None, drift_request=None):
         # signs_enabled, exposure_hold: threading.Event flags read by the
-        # camera threads; None when not wired (tests, tools).
+        # camera threads; drift_request: read by the IMU thread. None when
+        # not wired (tests, tools).
         self.cfg = cfg
         self.signs_enabled = signs_enabled
         self.exposure_hold = exposure_hold
+        self.drift_request = drift_request
         self.state = None
         self.state_t = 0.0                 # time the current state was entered
         self.stop_reason = None            # why SAFE_STOP was entered
@@ -64,7 +70,8 @@ class Behaviour:
         # Reason to stop, or None.
         if motor_error:
             return "motor serial error"
-        if imu is not None and now - imu.t > self.cfg.MAX_OBS_AGE_S:
+        if (self.state in _IMU_STEER_STATES and imu is not None
+                and now - imu.t > self.cfg.MAX_OBS_AGE_S):
             return "IMU data stale"
         if self.state in _LANE_STATES and now - self._lane_seen_t > self.cfg.LANE_LOST_TIMEOUT_S:
             return "lane lost"
@@ -104,7 +111,7 @@ class Behaviour:
             f"Behaviour: {self.state.name} is built with the junction work")
 
     def _enter(self, state, now, reason=None):
-        # Records entry time and reason; sets the camera-thread flags.
+        # Records entry time and reason; sets the camera and IMU thread flags.
         self.state = state
         self.state_t = now
         self.stop_reason = reason if state == State.SAFE_STOP else None
@@ -113,6 +120,7 @@ class Behaviour:
         if state == State.LANE_FOLLOW:
             self._lane_seen_t = now        # fresh grace period on start
         self._set_flag(self.exposure_hold, state != State.LANE_FOLLOW)
+        self._set_flag(self.drift_request, state in _STILL_STATES)
         if state == State.APPROACH:
             self._set_flag(self.signs_enabled, True)
         elif state in (State.LANE_FOLLOW, State.IDLE, State.SAFE_STOP):

@@ -103,8 +103,15 @@ def test_motor_error_stops(b):
     assert b.stop_reason == "motor serial error"
 
 
-def test_stale_imu_stops(b):
+def test_stale_imu_does_not_stop_lane_following(b):
+    # Lane following works without the IMU (no KD_YAW damping).
     start(b, 1.0)
+    assert step(b, 2.0, imu_s=imu(t=1.0)) == State.LANE_FOLLOW
+
+
+@pytest.mark.parametrize("state", [State.TURN, State.CROSS])
+def test_stale_imu_stops_imu_steered_states(b, state):
+    b._enter(state, 1.0)
     assert step(b, 2.0, imu_s=imu(t=1.0)) == State.SAFE_STOP
     assert b.stop_reason == "IMU data stale"
 
@@ -127,6 +134,41 @@ def test_stop_command_returns_to_idle(b):
     start(b, 1.0)
     assert step(b, 1.5, STOP) == State.IDLE
     assert step(b, 1.6) == State.IDLE           # old START not remembered
+
+
+# ---------------------------------------------------------------- drift request
+
+@pytest.fixture
+def drift():
+    return threading.Event()
+
+
+@pytest.fixture
+def bd(drift):
+    return Behaviour(config, drift_request=drift)
+
+
+def test_drift_requested_while_idle_and_cleared_on_start(bd, drift):
+    assert drift.is_set()
+    assert step(bd, 1.0, START) == State.LANE_FOLLOW
+    assert not drift.is_set()
+    step(bd, 2.0, STOP)
+    assert bd.state == State.IDLE and drift.is_set()
+
+
+def test_drift_cleared_on_safe_stop(bd, drift):
+    start(bd)
+    step(bd, 2.0, motor_error=True)
+    assert bd.state == State.SAFE_STOP and not drift.is_set()
+
+
+@pytest.mark.parametrize("state", list(State))
+def test_drift_requested_only_in_idle_and_stop_hold(bd, drift, state):
+    # Every exit goes through _enter, so this covers clearing on every exit.
+    bd._enter(State.STOP_HOLD, 1.0)
+    assert drift.is_set()
+    bd._enter(state, 2.0)
+    assert drift.is_set() == (state in (State.IDLE, State.STOP_HOLD))
 
 
 # ---------------------------------------------------------------- junction hook

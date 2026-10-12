@@ -15,8 +15,16 @@ def drive_for_state(state, est, imu, behaviour, lane_ctrl, front, cfg):
         return DriveCmd(speed=0.0, steer=0.0)
     if state in _LANE_STATES:
         steer = lane_ctrl.update(est, _yaw_rate(imu), 1.0 / cfg.CONTROL_HZ)
-        return DriveCmd(speed=target_speed(state, est, cfg), steer=steer)
+        speed = target_speed(state, est, cfg)
+        return DriveCmd(speed=speed, steer=_arc_limit(steer, speed, cfg))
     raise NotImplementedError(f"drive_for_state: {state.name} is wired with state_machine.py")
+
+
+def _arc_limit(steer, speed, cfg):
+    # Caps steer to a fraction of speed so the inner wheel slows but keeps
+    # rolling forward: the robot arcs back to centre instead of pivoting.
+    limit = cfg.LANE_STEER_SPEED_RATIO * speed
+    return max(-limit, min(limit, steer))
 
 
 def _yaw_rate(imu):

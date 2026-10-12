@@ -3,9 +3,11 @@ command, mixer).
 
 Run from the robot/ folder:  python -m pytest tests
 """
+import copy
 import math
 import os
 import sys
+import types
 
 import numpy as np
 import pytest
@@ -47,6 +49,38 @@ def test_yaw_rate_damps_steer(no_smoothing):
     ctrl = LaneController(config)
     calm = ctrl.update(est(lateral=0.05), 0.0, 1 / 30)
     assert ctrl.update(est(lateral=0.05), 20.0, 1 / 30) < calm
+
+
+def run_lane_correction(kd, speed_mps=0.5, yaw_dps_per_steer=150.0, loops=90):
+    # Closed loop on a simple kinematic robot: starts 5 cm right of the line,
+    # square to the road. Steer sets the yaw rate (+ = left) seen next loop;
+    # yaw rate turns the heading error, heading error moves the axle.
+    # Each loop also asks an identical controller with yaw rate 0 what it
+    # would have steered. Returns [(yaw_rate, lateral, steer, undamped)].
+    cfg = types.SimpleNamespace(**{**vars(config), "KD_YAW": kd})
+    ctrl, dt = LaneController(cfg), 1.0 / config.CONTROL_HZ
+    lateral, heading, rate, log = 0.05, 0.0, 0.0, []
+    for _ in range(loops):
+        e = est(lateral=lateral, heading=heading)
+        undamped = copy.deepcopy(ctrl).update(e, 0.0, dt)
+        steer = ctrl.update(e, rate, dt)
+        log.append((rate, lateral, steer, undamped))
+        rate = yaw_dps_per_steer * steer
+        heading -= math.radians(rate) * dt
+        lateral += speed_mps * math.sin(heading) * dt
+    return log
+
+
+def test_kd_yaw_reduces_steer_while_turning_toward_line():
+    # Right of the line (lateral +), steering left: once the robot is turning
+    # left (rate +), the KD_YAW term asks for less left steer than P + H alone.
+    log = run_lane_correction(config.KD_YAW)
+    toward = [(steer, undamped) for rate, lateral, steer, undamped in log
+              if rate > 0 and lateral > 0]
+    assert len(toward) > 10
+    assert all(steer < undamped for steer, undamped in toward)
+    peak = max(steer for _, _, steer, _ in log)
+    assert peak < max(steer for _, _, steer, _ in run_lane_correction(0.0))
 
 
 def test_steer_is_clamped(no_smoothing):
@@ -140,6 +174,14 @@ def test_lane_state_uses_controller_and_imu_rate(no_smoothing):
     assert no_imu.speed == config.CRUISE_SPEED
 
 
+def test_lane_steer_keeps_inner_wheel_forward(no_smoothing):
+    drive = drive_for_state(State.LANE_FOLLOW, est(lateral=1.0), None, None,
+                            LaneController(config), None, config)
+    assert drive.steer == pytest.approx(config.LANE_STEER_SPEED_RATIO * drive.speed)
+    motors = mix(drive, config)
+    assert motors.left > 0 and motors.right > 0
+
+
 def test_turn_and_cross_not_wired_yet():
     for state in (State.TURN, State.CROSS):
         with pytest.raises(NotImplementedError):
@@ -160,3 +202,17 @@ def test_mix_pivot_and_rescale():
     assert (pivot.left, pivot.right) == (-0.5, 0.5)
     fast = mix(DriveCmd(1.0, 0.5), config)
     assert fast.right == 1.0 and fast.left == pytest.approx(0.5 / 1.5)
+
+
+@pytest.mark.parametrize("imu_s", [None, ImuSample(0.0, 30.0, False, 3, 0.0, 0.0)],
+                         ids=["missing", "invalid"])
+def test_missing_or_invalid_imu_steers_like_kd_yaw_zero(monkeypatch, no_smoothing, imu_s):
+    # Lane following without a usable IMU = lane following with no damping.
+    e = est(lateral=0.05, heading=0.05)
+    without = drive_for_state(State.LANE_FOLLOW, e, imu_s, None,
+                              LaneController(config), None, config).steer
+    monkeypatch.setattr(config, "KD_YAW", 0.0)
+    turning = ImuSample(0.0, 30.0, True, 3, 0.0, 0.0)
+    kd_zero = drive_for_state(State.LANE_FOLLOW, e, turning, None,
+                              LaneController(config), None, config).steer
+    assert without == kd_zero

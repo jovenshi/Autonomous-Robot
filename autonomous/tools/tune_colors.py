@@ -1,6 +1,6 @@
 """Tune the yellow and road colour thresholds on recorded frames.
 
-Run from the robot/ folder on the Pi desktop:
+Run from the autonomous/ folder on the Pi desktop:
     python -m tools.tune_colors recordings/front_20261011_140000
 
 Two windows: "colors" shows four panels (frame | yellow mask | road mask |

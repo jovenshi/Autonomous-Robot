@@ -121,6 +121,29 @@ def test_no_anchor_when_conditions_fail(kwargs):
     assert not tracker.get().valid
 
 
+def anchors(imu_s=None, lane_e=None, state=State.LANE_FOLLOW):
+    tracker = RoadYawTracker(config)
+    tracker.update(imu_s, lane_e if lane_e is not None else lane(), state, NOW)
+    return tracker.get().valid
+
+
+def test_anchor_conditions_at_their_limits():
+    # conf >= ROAD_YAW_MIN_CONF and |rate| < ROAD_YAW_MAX_RATE_DPS (strict).
+    limit = config.ROAD_YAW_MAX_RATE_DPS
+    assert anchors(imu(), lane(conf=config.ROAD_YAW_MIN_CONF))
+    assert not anchors(imu(), lane(conf=config.ROAD_YAW_MIN_CONF - 0.01))
+    assert anchors(imu(rate=limit - 0.1))
+    assert anchors(imu(rate=-(limit - 0.1)))
+    assert not anchors(imu(rate=limit))
+    assert not anchors(imu(rate=-limit))
+
+
+def test_no_anchor_without_imu_or_outside_lane_follow():
+    assert not anchors(None)
+    assert not anchors(imu(), state=State.IDLE)
+    assert not anchors(imu(), state=State.SAFE_STOP)
+
+
 def test_stale_imu_does_not_anchor():
     tracker = RoadYawTracker(config)
     tracker.update(imu(t=NOW - 1.0), lane(), State.LANE_FOLLOW, NOW)
@@ -152,6 +175,7 @@ def test_healthy_system_has_no_warnings():
 
 @pytest.mark.parametrize("kw, warning", [
     (dict(imu=imu(valid=False)), W.IMU_INVALID),
+    (dict(imu=imu(t=NOW - 1.0)), W.IMU_INVALID),          # stale: IMU thread stalled
     (dict(imu=imu(calib=2)), W.IMU_NOT_CALIBRATED),
     (dict(imu=imu(drift=0.5)), W.IMU_DRIFT_HIGH),
     (dict(road_yaw=RoadYaw(0.0, NOW - 10, True)), W.ROAD_YAW_STALE),

@@ -36,6 +36,10 @@ class FakeSerial:
 def driver(monkeypatch):
     monkeypatch.setattr(sabertooth.serial, "Serial", FakeSerial)
     monkeypatch.setattr(sabertooth.time, "sleep", lambda s: None)
+    # Packets below assume the default wiring, whatever the robot's config says.
+    for name, value in (("LEFT_CHANNEL", 1), ("RIGHT_CHANNEL", 2),
+                        ("LEFT_INVERT", False), ("RIGHT_INVERT", False)):
+        monkeypatch.setattr(config, name, value)
     d = SabertoothDriver(config.SABER_PORT, config.SABER_BAUD, config.SABER_ADDRESS, config)
     d.open()
     d.ser.writes.clear()

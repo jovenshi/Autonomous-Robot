@@ -4,3 +4,5 @@ venv/
 .venv/
 .env
 *.log
+autonomous/logs/
+autonomous/recordings/

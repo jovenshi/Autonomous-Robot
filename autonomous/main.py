@@ -1,8 +1,8 @@
 """Robot entry point: build the system, run the 30 Hz control loop, shut down.
 
-Straight-driving build: front camera, lane fusion, lane controller,
-behaviour (IDLE / LANE_FOLLOW / SAFE_STOP) and the Sabertooth. The side
-camera, IMU, sign voter and display are added as they are written.
+Straight-driving build: front camera, IMU, lane fusion, road yaw, lane
+controller, behaviour (IDLE / LANE_FOLLOW / SAFE_STOP) and the Sabertooth.
+The side camera, sign voter and display are added as they are written.
 
 Run from the robot/ folder:  python main.py
     Enter            START  (again after SAFE_STOP: once to IDLE, once to drive)
@@ -11,6 +11,7 @@ Run from the robot/ folder:  python main.py
 
 Test on a stand with the wheels off the ground before the first real run.
 """
+import os
 import queue
 import threading
 import time
@@ -23,11 +24,13 @@ from control.command import drive_for_state
 from control.lane_controller import LaneController
 from control.mixer import mix
 from estimation.health import check_health
-from estimation.lane_fusion import fuse_lane
+from estimation.lane_fusion import fuse_lane, is_fresh
 from estimation.road_yaw import RoadYawTracker
 from hal.camera import CameraStream, CsiSource
 from hal.exposure import ExposureControl
+from hal.imu import ImuReader
 from hal.sabertooth import SabertoothDriver
+from loop_log import LoopLog
 from perception.pipeline import process_front_frame
 from robot_types import LatestValue, State, UiCommand
 
@@ -47,7 +50,9 @@ class System:
     road_yaw: RoadYawTracker
     behaviour: Behaviour
     commands: queue.Queue
-    imu: object = None                    # ImuReader once written
+    imu: object = None                    # ImuReader; None in tests without one
+    imu_slot: LatestValue = field(default_factory=LatestValue)
+    loop_log: object = None               # LoopLog, or None when LOOP_LOG_ENABLED is off
     prev_state: State = State.IDLE
     overrun_times: deque = field(default_factory=deque)
     last_warnings: tuple = ()
@@ -58,11 +63,16 @@ class System:
 # ---------------------------------------------------------------- build
 
 def build_system(cfg):
-    # Cameras first (they need warm-up), then the Sabertooth.
+    # IMU first (it calibrates in its own thread), then the cameras (they
+    # need warm-up), then the Sabertooth.
     if cfg.FRONT_BANDS is None:
         raise SystemExit("FRONT_BANDS is not set in config.py: run tools/calibrate.py first")
     signs_enabled, exposure_hold = threading.Event(), threading.Event()
     exposure_hold.set()                               # robot starts in IDLE
+    drift_request = threading.Event()
+    imu_slot = LatestValue()
+    imu = ImuReader(imu_slot, drift_request, cfg)
+    imu.start()
     front_slot = LatestValue()
     front_cam, front_exposure = _build_front_camera(cfg, front_slot, signs_enabled, exposure_hold)
 
@@ -77,8 +87,17 @@ def build_system(cfg):
         cfg=cfg, front_slot=front_slot, signs_enabled=signs_enabled,
         exposure_hold=exposure_hold, front_cam=front_cam, front_exposure=front_exposure,
         saber=saber, lane_ctrl=LaneController(cfg), road_yaw=RoadYawTracker(cfg),
-        behaviour=Behaviour(cfg, signs_enabled, exposure_hold), commands=commands,
+        behaviour=Behaviour(cfg, signs_enabled, exposure_hold, drift_request),
+        commands=commands, imu=imu, imu_slot=imu_slot, loop_log=_open_loop_log(cfg),
     )
+
+
+def _open_loop_log(cfg):
+    if not cfg.LOOP_LOG_ENABLED:
+        return None
+    log = LoopLog(os.path.join(os.path.dirname(os.path.abspath(__file__)), cfg.LOOP_LOG_DIR), cfg)
+    print(f"Logging each loop to {log.path}")
+    return log
 
 
 def _build_front_camera(cfg, slot, signs_enabled, exposure_hold):
@@ -115,24 +134,31 @@ def _start_keyboard(commands):
 
 def control_step(sys, now):
     # Read slots -> fuse -> road yaw -> health -> behaviour -> drive -> mix -> Sabertooth.
+    # imu_raw is the latest sample whatever its age (health and the safety
+    # check judge staleness); imu is None when it is missing or older than
+    # MAX_OBS_AGE_S, so road yaw and steering never use stale yaw.
     cfg = sys.cfg
     front = sys.front_slot.get()
+    imu_raw = sys.imu_slot.get()
+    imu = imu_raw if is_fresh(imu_raw, now, cfg) else None
     lane = fuse_lane(front, None, now, cfg)
-    sys.road_yaw.update(sys.imu, lane, sys.behaviour.state, now)
+    sys.road_yaw.update(imu, lane, sys.behaviour.state, now)
     road_yaw = sys.road_yaw.get() if sys.imu is not None else None
     commands = _read_commands(sys.commands)
 
-    warnings = check_health(front, None, None, lane, road_yaw, {"front": sys.front_cam.fps()},
+    warnings = check_health(front, None, imu_raw, lane, road_yaw, {"front": sys.front_cam.fps()},
                             _recent_overruns(sys, now), sys.saber.serial_error, now, cfg)
-    state = sys.behaviour.step(front, None, lane, road_yaw, None, None, commands,
+    state = sys.behaviour.step(front, None, lane, road_yaw, None, imu_raw, commands,
                                sys.saber.serial_error, now)
     if state in _LANE_STATES and state != sys.prev_state:
         sys.lane_ctrl.reset()
 
-    drive = drive_for_state(state, lane, None, sys.behaviour, sys.lane_ctrl, front, cfg)
+    drive = drive_for_state(state, lane, imu, sys.behaviour, sys.lane_ctrl, front, cfg)
     sys.saber.set(mix(drive, cfg))                   # every loop, or the timeout stops the motors
     sys.last_drive = drive
-    _report(sys, state, lane, warnings, now)
+    if sys.loop_log is not None:
+        sys.loop_log.write(now, state, lane, imu, drive)
+    _report(sys, state, lane, imu, road_yaw, warnings, now)
     sys.prev_state = state
 
 
@@ -152,7 +178,7 @@ def _recent_overruns(sys, now):
     return len(sys.overrun_times)
 
 
-def _report(sys, state, lane, warnings, now):
+def _report(sys, state, lane, imu, road_yaw, warnings, now):
     # Terminal output until the display exists: state changes and warning
     # changes at once, a status line every STATUS_PRINT_S.
     if state != sys.prev_state:
@@ -164,6 +190,7 @@ def _report(sys, state, lane, warnings, now):
         sys.last_warnings = names
     if now - sys.last_status_t >= sys.cfg.STATUS_PRINT_S:
         print(_status_line(sys, state, lane))
+        print("  " + _imu_line(imu, road_yaw, now))
         sys.last_status_t = now
 
 
@@ -175,6 +202,17 @@ def _status_line(sys, state, lane):
     return (f"{state.name:<11} lat {lat}  head {head}  conf {lane.conf:.2f}  "
             f"speed {drive.speed:.2f}  steer {drive.steer:+.2f}  "
             f"fps {sys.front_cam.fps():4.1f}  cam errors {sys.front_cam.error_count}")
+
+
+def _imu_line(imu, road_yaw, now):
+    # yaw, yaw rate, road yaw and the time since its last camera anchor, calib, drift.
+    if imu is None:
+        return "IMU --"
+    road = (f"road {road_yaw.yaw_deg:+7.1f} deg ({now - road_yaw.t_anchor:4.1f} s ago)"
+            if road_yaw is not None and road_yaw.valid else "road   --")
+    return (f"yaw {imu.yaw_deg:+7.1f} deg  rate {imu.yaw_rate_dps:+6.1f} deg/s  {road}  "
+            f"valid {int(imu.valid)}  "
+            f"calib {imu.calib_gyro}  drift {imu.drift_dps:+.3f} deg/s")
 
 
 # ---------------------------------------------------------------- loop and shutdown
@@ -198,7 +236,15 @@ def run(sys):
 
 def shutdown(sys):
     # Motors first, then everything else; each step runs even if one fails.
-    for step in (sys.saber.stop, sys.saber.close, sys.front_cam.stop):
+    # The loop log is flushed before the camera, whose stop can hang when the
+    # camera has failed, so the log of a bad run is never lost.
+    steps = [sys.saber.stop, sys.saber.close]
+    if sys.imu is not None:
+        steps.append(sys.imu.close)
+    if sys.loop_log is not None:
+        steps.append(sys.loop_log.close)
+    steps.append(sys.front_cam.stop)
+    for step in steps:
         try:
             step()
         except Exception as e:

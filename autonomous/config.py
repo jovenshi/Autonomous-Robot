@@ -118,10 +118,10 @@ CRUISE_SPEED = 0.7              # 0-1
 APPROACH_SPEED = 0.3
 CROSS_SPEED = 0.3
 REACQUIRE_SPEED = 0.3
-KP_LAT = 4.0                    # steer per m
+KP_LAT = 2.0                    # steer per m
 KH = 0.8                        # steer per rad
 KD_YAW = 0.004                  # steer per deg/s
-STEER_SMOOTH = 0.7              # 0 = none, near 1 = heavy
+STEER_SMOOTH = 0.5              # 0 = none, near 1 = heavy
 STEER_MAX = 0.6                 # steer
 LANE_STEER_SPEED_RATIO = 0.7    # lane |steer| <= this x speed; below 1 the inner wheel never reverses
 REACQUIRE_CONF = 0.6
@@ -191,8 +191,16 @@ MOTOR_DEADBAND = 0.15           # 0-1; software lift so small commands still mov
 UI_ENABLED = True
 UI_HZ = 10                      # Hz
 UI_IMAGE_EVERY = 3              # loops
-DISPLAY_SIZE = None             # CONFIRM: depends on the display model
-UI_START_VIEW = "split"
+DISPLAY_SIZE = (800, 480)       # px; official 7" touch display; checked against pygame at startup
+UI_VIEW_STALE_S = 1.0           # s; a kept camera view older than this is greyed out with its age
+UI_CHART_S = 5.0                # s; strip chart history (lateral error and steer)
+UI_CHART_LAT_M = 0.10           # m; lateral range (+/-) of the strip chart and the lane gauge
+UI_CHART_GAP_S = 0.3            # s; strip chart breaks the line across a gap this long
+UI_CMD_QUEUE_SIZE = 8           # commands; UI -> main queue (START / STOP taps)
+UI_STOP_TIMEOUT_S = 1.0         # s; shutdown waits this long for the display process
+UI_START_VIEW = "drive"          # "drive", "camera" or "diagnostic"
+UI_FONT = "/usr/share/fonts/truetype/piboto/Piboto-Regular.ttf"
+UI_FONT_BOLD = "/usr/share/fonts/truetype/piboto/Piboto-Bold.ttf"
 CAM_FPS_MIN = 20                # fps
 STATUS_PRINT_S = 1.0            # s; terminal status line interval (until the display exists)
 LOOP_LOG_ENABLED = True         # one CSV row per control loop (loop_log.py)

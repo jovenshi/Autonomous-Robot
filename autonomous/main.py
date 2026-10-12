@@ -33,6 +33,7 @@ from hal.sabertooth import SabertoothDriver
 from loop_log import LoopLog
 from perception.pipeline import process_front_frame
 from robot_types import LatestValue, State, UiCommand
+from ui.link import make_ui_packet, read_commands, send, start_ui, stop_ui
 
 _LANE_STATES = (State.LANE_FOLLOW, State.APPROACH, State.REACQUIRE)
 
@@ -53,6 +54,10 @@ class System:
     imu: object = None                    # ImuReader; None in tests without one
     imu_slot: LatestValue = field(default_factory=LatestValue)
     loop_log: object = None               # LoopLog, or None when LOOP_LOG_ENABLED is off
+    ui_process: object = None             # display process and its queues; None when
+    ui_packet_q: object = None            # UI_ENABLED is off (no display process at all)
+    ui_cmd_q: object = None
+    ui_loops: int = 0                     # loops since start, for UI_IMAGE_EVERY
     prev_state: State = State.IDLE
     overrun_times: deque = field(default_factory=deque)
     last_warnings: tuple = ()
@@ -73,6 +78,7 @@ def build_system(cfg):
     imu_slot = LatestValue()
     imu = ImuReader(imu_slot, drift_request, cfg)
     imu.start()
+    ui = start_ui(cfg) if cfg.UI_ENABLED else (None, None, None)
     front_slot = LatestValue()
     front_cam, front_exposure = _build_front_camera(cfg, front_slot, signs_enabled, exposure_hold)
 
@@ -89,6 +95,7 @@ def build_system(cfg):
         saber=saber, lane_ctrl=LaneController(cfg), road_yaw=RoadYawTracker(cfg),
         behaviour=Behaviour(cfg, signs_enabled, exposure_hold, drift_request),
         commands=commands, imu=imu, imu_slot=imu_slot, loop_log=_open_loop_log(cfg),
+        ui_process=ui[0], ui_packet_q=ui[1], ui_cmd_q=ui[2],
     )
 
 
@@ -145,19 +152,29 @@ def control_step(sys, now):
     sys.road_yaw.update(imu, lane, sys.behaviour.state, now)
     road_yaw = sys.road_yaw.get() if sys.imu is not None else None
     commands = _read_commands(sys.commands)
+    if sys.ui_cmd_q is not None:
+        commands += read_commands(sys.ui_cmd_q)      # taps, merged with the keyboard
 
-    warnings = check_health(front, None, imu_raw, lane, road_yaw, {"front": sys.front_cam.fps()},
-                            _recent_overruns(sys, now), sys.saber.serial_error, now, cfg)
+    fps, overruns = {"front": sys.front_cam.fps()}, _recent_overruns(sys, now)
+    warnings = check_health(front, None, imu_raw, lane, road_yaw, fps,
+                            overruns, sys.saber.serial_error, now, cfg)
     state = sys.behaviour.step(front, None, lane, road_yaw, None, imu_raw, commands,
                                sys.saber.serial_error, now)
     if state in _LANE_STATES and state != sys.prev_state:
         sys.lane_ctrl.reset()
 
     drive = drive_for_state(state, lane, imu, sys.behaviour, sys.lane_ctrl, front, cfg)
-    sys.saber.set(mix(drive, cfg))                   # every loop, or the timeout stops the motors
+    motor = mix(drive, cfg)
+    sys.saber.set(motor)                             # every loop, or the timeout stops the motors
     sys.last_drive = drive
     if sys.loop_log is not None:
         sys.loop_log.write(now, state, lane, imu, drive)
+    if sys.ui_packet_q is not None:
+        include_views = sys.ui_loops % cfg.UI_IMAGE_EVERY == 0
+        sys.ui_loops += 1
+        send(sys.ui_packet_q, make_ui_packet(sys, now, drive, motor, lane, road_yaw, imu_raw,
+                                             None, fps, overruns, warnings, front, None,
+                                             include_views))
     _report(sys, state, lane, imu, road_yaw, warnings, now)
     sys.prev_state = state
 
@@ -243,6 +260,10 @@ def shutdown(sys):
         steps.append(sys.imu.close)
     if sys.loop_log is not None:
         steps.append(sys.loop_log.close)
+    if sys.ui_process is not None:
+        def stop_display():
+            stop_ui(sys.ui_process, sys.cfg)
+        steps.append(stop_display)
     steps.append(sys.front_cam.stop)
     for step in steps:
         try:

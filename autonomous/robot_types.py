@@ -210,6 +210,7 @@ class UiPacket:
     state: State
     stop_reason: Optional[str]
     drive: DriveCmd
+    motor: MotorCmd                    # what was sent to the Sabertooth this loop
     lane: Optional[LaneEstimate]
     road_yaw: Optional[RoadYaw]
     imu: Optional[ImuSample]

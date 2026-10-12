@@ -274,3 +274,65 @@ def test_build_refuses_without_bands(monkeypatch):
     monkeypatch.setattr(config, "FRONT_BANDS", None)
     with pytest.raises(SystemExit):
         main.build_system(config)
+
+
+# ---------------------------------------------------------------- display link
+
+def with_ui_queues(system):
+    # Plain queues stand in for the display process's queues.
+    system.ui_packet_q, system.ui_cmd_q = queue.Queue(), queue.Queue()
+    return system
+
+
+def drain(q):
+    out = []
+    while not q.empty():
+        out.append(q.get_nowait())
+    return out
+
+
+def test_ui_packet_carries_the_motor_command_actually_sent(system):
+    with_ui_queues(system)
+    drive_once(system, 1.0)
+    packet = drain(system.ui_packet_q)[-1]
+    assert packet.motor == system.saber.sent[-1]
+    assert packet.drive == system.last_drive and packet.state == State.LANE_FOLLOW
+    assert packet.fps == {"front": 30.0}
+
+
+def test_ui_views_only_every_ui_image_every_loops(system):
+    with_ui_queues(system)
+    for i in range(3 * config.UI_IMAGE_EVERY):
+        publish(system, 1.0 + i / 30)
+        main.control_step(system, 1.0 + i / 30)
+    packets = drain(system.ui_packet_q)
+    with_views = [i for i, p in enumerate(packets) if p.front is not None]
+    assert len(packets) == 3 * config.UI_IMAGE_EVERY
+    assert with_views == list(range(0, len(packets), config.UI_IMAGE_EVERY))
+    assert all(p.lane is not None for p in packets)          # numbers every loop
+
+
+def test_ui_start_tap_is_merged_with_keyboard_commands(system):
+    with_ui_queues(system)
+    system.ui_cmd_q.put(UiCommand.START)
+    publish(system, 1.0)
+    main.control_step(system, 1.0)
+    assert system.behaviour.state == State.LANE_FOLLOW
+    system.commands.put(UiCommand.STOP)                       # keyboard still works
+    publish(system, 1.03)
+    main.control_step(system, 1.03)
+    assert system.behaviour.state == State.IDLE
+
+
+def test_no_display_means_no_packets(system):
+    assert system.ui_packet_q is None and system.ui_process is None
+    drive_once(system, 1.0)                                    # runs as before
+
+
+def test_shutdown_stops_display_before_camera(with_imu, monkeypatch):
+    order = with_imu.saber.calls
+    with_imu.front_cam.calls = order
+    with_imu.ui_process = object()
+    monkeypatch.setattr(main, "stop_ui", lambda process, cfg: order.append("ui_stop"))
+    main.shutdown(with_imu)
+    assert order == ["stop", "close", "imu_close", "ui_stop", "cam_stop"]

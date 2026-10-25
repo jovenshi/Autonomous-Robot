@@ -51,6 +51,48 @@ MIN_LINE_PX = 30                # pixels per band
 ROAD_COL_FRAC = 0.5             # a band column counts as road if this fraction of its rows is road
 ROAD_GAP_MAX_PX = 8             # gaps in the road this narrow (px, lane size) are bridged
 FRONT_FIT_RMS_MAX_M = 0.03      # m; fit error at which front lane conf falls to 0
+ROAD_WIDTH_M = 0.31             # m, edge to edge; MEASURED (matches the current FRONT_BANDS)
+
+# MEASURED by tools/calib_ui.py (or tools/calibrate.py fit): written there on APPLY.
+# FRONT_GROUND_H maps FRONT_LANE_SIZE pixels (lens-corrected when the lens
+# values are set) to (forward_m, lateral_m) from the rear axle. Perception
+# uses FRONT_BANDS only; the homography is kept for the pre-session check.
+FRONT_GROUND_H = None           # MEASURED: 3 x 3 nested list
+FRONT_CAM_MATRIX = None         # MEASURED (lens step, optional): 3 x 3, FRONT_SIZE pixels
+FRONT_DIST_COEFFS = None        # MEASURED (lens step, optional): OpenCV distortion coefficients
+
+# ---------------------------------------------------------------- calibration (tools/calib_ui.py)
+
+CALIB_DIR = "calibration"       # relative to autonomous/; one folder per session
+CALIB_UI_HZ = 15                # Hz; guided screen redraw (live camera view)
+CALIB_STILL_PX = 1.5            # px; board corners moving less than this per frame count as still
+CALIB_SQUARE_M = 0.025          # m; MEASURED on your print (printers rescale)
+CALIB_PATTERN = (9, 6)          # inner corners (across, along); a 10 x 7-square board
+CALIB_BAND_COUNT = 5
+CALIB_BAND_FILL = 0.75          # fraction of each band slot a band covers
+CALIB_MIN_FIT_BOARDS = 4        # board photos needed before a fit is allowed
+# Suggested board spots: (nearest inner-corner row from the rear axle, board
+# centre right of the centreline tape, role). "fit" photos make the fit; the
+# "check" photo is held back to verify it and becomes the taped check spot.
+# Slide a board until it is fully in view if needed and enter where it really is.
+CALIB_POSITIONS = (
+    (0.72, 0.00, "fit"), (0.72, -0.07, "fit"), (0.72, 0.07, "fit"),
+    (0.82, 0.00, "fit"), (0.92, 0.00, "fit"), (1.02, 0.00, "fit"),
+    (1.12, 0.00, "fit"), (1.12, -0.12, "fit"), (1.12, 0.12, "fit"),
+    (0.87, 0.05, "check"),
+)
+CALIB_BOARD_RMS_WARN_M = 0.003  # m; a board fitting worse than this is flagged
+CALIB_BOARD_OFFSET_WARN_M = 0.004   # m; a board's mean miss this large suggests a mis-measured spot
+CALIB_HOLDOUT_TOL_M = 0.005     # m; mean error on the held-back photo for a PASS
+CALIB_CHECK_TOL_M = 0.005       # m; mean error for the pre-session check to PASS
+CALIB_LENS_EDGE_RATIO = 2.0     # edge boards fitting this much worse than centre ones -> lens hint
+CALIB_CHECK_NEAR_M = None       # m; MEASURED: the taped check spot (set on APPLY)
+CALIB_CHECK_LATERAL_M = None    # m; MEASURED: the taped check spot (set on APPLY)
+CALIB_LENS_MIN_PHOTOS = 12      # lens step: photos needed
+CALIB_LENS_MIN_CELLS = 7        # lens step: of the 3 x 3 image cells, how many corners must reach
+CALIB_LENS_NEW_PX = 40          # px; a lens photo must move the board this far from earlier ones
+CALIB_LENS_RMS_WARN_PX = 0.8    # px; lens fit error above this: retake blurry or bent photos
+CALIB_LENS_NEGLIGIBLE_MM = 1.0  # mm; lens correction moving band points less than this is not worth applying
 
 # ---------------------------------------------------------------- exposure and lighting
 

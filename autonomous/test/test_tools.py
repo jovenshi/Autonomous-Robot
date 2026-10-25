@@ -1,4 +1,5 @@
-"""Tests for tools/: recording, record, tune_colors, calibrate, replay.
+"""Tests for tools/: recording, record, tune_colors, replay, imu_drift_test,
+weave_report (calibrate: test_calibrate.py).
 No camera, no windows, no motors.
 
 Run from the robot/ folder:  python -m pytest tests
@@ -19,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import config  # noqa: E402
 from robot_types import Frame
 from test_perception import BANDS, CX, H, W, scene
-from tools import calibrate, record, replay, tune_colors
+from tools import record, replay, tune_colors
 from tools.recording import RecordingWriter, iter_frames, read_index, read_meta
 
 
@@ -132,110 +133,6 @@ def test_render_without_bands(monkeypatch):
     frame = Frame(scene(), 0.0, 1, "front")
     grid, _ = tune_colors.render(frame, tune_colors.config_with({}))
     assert grid.shape == (2 * H, 2 * W, 3)
-
-
-# ---------------------------------------------------------------- calibrate
-
-FX, U0, V0 = 500.0, 320.0, 240.0
-CAM_X, CAM_H, PITCH = 0.10, 0.25, math.radians(45)
-
-
-def project(forward, lateral):
-    """Virtual pinhole camera on the centreline, CAM_X ahead of the axle,
-    CAM_H up, pitched down by PITCH. Ground (forward, lateral) -> image px."""
-    c, s = math.cos(PITCH), math.sin(PITCH)
-    dx = forward - CAM_X
-    zc = dx * c + CAM_H * s
-    yc = -dx * s + CAM_H * c
-    return FX * lateral / zc + U0, FX * yc / zc + V0
-
-
-def ground_to_image_h():
-    pts = [(f, l) for f in (0.2, 0.4, 0.6) for l in (-0.2, 0.0, 0.2)]
-    src = np.float64(pts)
-    dst = np.float64([project(f, l) for f, l in pts])
-    return cv2.findHomography(src, dst, 0)[0]
-
-
-def chessboard_image(near_m, square_m=0.025):
-    """The board (10 x 7 squares, 9 x 6 inner corners) on green ground as the
-    virtual camera sees it."""
-    px_per_m = 2000.0
-    sq = int(square_m * px_per_m)
-    margin = sq
-    tex_w, tex_h = 10 * sq + 2 * margin, 7 * sq + 2 * margin
-    tex = np.full((tex_h, tex_w, 3), 255, np.uint8)
-    for r in range(7):
-        for c in range(10):
-            if (r + c) % 2 == 0:
-                tex[margin + r * sq:margin + (r + 1) * sq, margin + c * sq:margin + (c + 1) * sq] = 0
-    first_row_y = margin + 6 * sq                     # nearest inner-corner row in the texture
-    centre_x = margin + 5 * sq                        # middle inner-corner column
-    g_from_tex = np.array([[0, -1 / px_per_m, near_m + first_row_y / px_per_m],
-                           [1 / px_per_m, 0, -centre_x / px_per_m],
-                           [0, 0, 1]])
-    img_from_tex = ground_to_image_h() @ g_from_tex
-    return cv2.warpPerspective(tex, img_from_tex, (640, 480), flags=cv2.INTER_LINEAR,
-                               borderValue=(40, 150, 40))
-
-
-def true_ground(lane_x, lane_y):
-    inv = np.linalg.inv(ground_to_image_h())
-    p = inv @ np.array([lane_x * 2, lane_y * 2, 1.0])   # lane px -> full px (x2)
-    return p[:2] / p[2]
-
-
-def calib_args(**kw):
-    argv = ["x.png", "--near-m", "0.30", "--road-width-m", "0.30", "--no-window"]
-    for key, value in kw.items():
-        argv += [f"--{key.replace('_', '-')}", str(value)]
-    return calibrate.parse_args(argv)
-
-
-def test_calibration_matches_virtual_camera():
-    bands, report, preview = calibrate.calibrate(chessboard_image(0.30), calib_args(), (W, H))
-    assert len(bands) == 5 and preview.shape == (H, W, 3)
-    assert report["rms_m"] < 0.002
-    assert abs(report["offset_m"]) < 0.003 and abs(report["yaw_deg"]) < 0.5
-    for y_top, y_bottom, forward_m, half_road_px, m_per_px in bands:
-        y_mid = (y_top + y_bottom) / 2
-        forward_true, _ = true_ground(CX, y_mid)
-        lat_l, lat_r = true_ground(CX - 40, y_mid)[1], true_ground(CX + 40, y_mid)[1]
-        assert forward_m == pytest.approx(forward_true, abs=0.003)
-        assert m_per_px == pytest.approx((lat_r - lat_l) / 80, rel=0.02)
-        assert half_road_px == round(0.15 / m_per_px)
-    assert [b[2] for b in bands] == sorted([b[2] for b in bands], reverse=True)  # far first
-
-
-def test_calibration_extends_rows_on_request():
-    bands, _, _ = calibrate.calibrate(chessboard_image(0.30), calib_args(top_row=60, bottom_row=200),
-                                      (W, H))
-    assert bands[0][0] >= 60 and bands[-1][1] <= 200
-    assert bands[-1][2] == pytest.approx(true_ground(CX, (bands[-1][0] + bands[-1][1]) / 2)[0],
-                                         abs=0.005)
-
-
-def test_band_rows_and_widths_are_integers():
-    bands, _, _ = calibrate.calibrate(chessboard_image(0.30), calib_args(), (W, H))
-    assert all(isinstance(b[0], int) and isinstance(b[3], int) for b in bands)
-
-
-def test_no_board_is_reported():
-    with pytest.raises(SystemExit):
-        calibrate.calibrate(np.full((480, 640, 3), 120, np.uint8), calib_args(), (W, H))
-
-
-def test_order_grid_handles_flips_and_rotation():
-    rows, cols = 6, 9
-    yy, xx = np.mgrid[0:rows, 0:cols]
-    want = np.dstack([100 + 10 * xx, 200 - 10 * yy]).astype(np.float32)  # row 0 lowest, col 0 left
-    flipped = want[::-1, ::-1].reshape(-1, 2)
-    assert np.array_equal(calibrate.order_grid(flipped, (9, 6)), want)
-    # board turned 90 deg: 9 corners along forward, detector rows run up the image
-    yy, xx = np.mgrid[0:9, 0:6]
-    want_rot = np.dstack([100 + 10 * xx, 200 - 10 * yy]).astype(np.float32)
-    detector = want_rot.transpose(1, 0, 2).reshape(-1, 2)
-    assert np.array_equal(calibrate.order_grid(detector, (9, 6)), want_rot)
 
 
 # ---------------------------------------------------------------- replay

@@ -6,3 +6,5 @@ venv/
 *.log
 autonomous/logs/
 autonomous/recordings/
+autonomous/calibration/
+autonomous/config.py.bak

@@ -8,12 +8,13 @@ from perception.front_lane import process_front_lane
 from robot_types import FrontResult
 
 
-def process_front_frame(frame, signs_enabled, cfg):
+def process_front_frame(frame, signs_enabled, cfg, tracker=None):
     # Front thread entry: masks once, then lane. Junction and sign results
     # are None until those modules exist; signs_enabled is accepted now so
     # the signature (and build_system's partial) won't change later.
+    # tracker: the camera thread's LaneTracker (search window), or None.
     masks = make_front_masks(frame, cfg, with_signs=False)
-    lane = process_front_lane(masks, cfg, frame.t, frame.seq)
+    lane = process_front_lane(masks, cfg, frame.t, frame.seq, tracker)
     return FrontResult(
         view=masks.bgr,              # shared with the display; draw on a copy
         lane=lane,

@@ -51,6 +51,12 @@ MIN_LINE_PX = 30                # pixels per band
 ROAD_COL_FRAC = 0.5             # a band column counts as road if this fraction of its rows is road
 ROAD_GAP_MAX_PX = 8             # gaps in the road this narrow (px, lane size) are bridged
 FRONT_FIT_RMS_MAX_M = 0.03      # m; fit error at which front lane conf falls to 0
+LANE_SEARCH_M = 0.06            # m; yellow is searched for this far either side of the last fit
+LANE_SEARCH_MAX_AGE_S = 0.2     # s; an older fit switches the window off (full-width search)
+LANE_SEARCH_MIN_CONF = 0.5      # conf a fit needs before it sets the next window
+LANE_OUTLIER_M = 0.015          # m; a band point missing the fit by more is dropped
+LANE_MIN_KEEP = 3               # band points always kept, however bad
+LANE_EDGE_WEIGHT = 0.5          # weight of a road-edge point (dash gap) vs a yellow point
 ROAD_WIDTH_M = 0.31             # m, edge to edge; MEASURED (matches the current FRONT_BANDS)
 
 # MEASURED by tools/calib_ui.py (or tools/calibrate.py fit): written there on APPLY.
@@ -85,6 +91,7 @@ CALIB_BOARD_RMS_WARN_M = 0.003  # m; a board fitting worse than this is flagged
 CALIB_BOARD_OFFSET_WARN_M = 0.004   # m; a board's mean miss this large suggests a mis-measured spot
 CALIB_HOLDOUT_TOL_M = 0.005     # m; mean error on the held-back photo for a PASS
 CALIB_CHECK_TOL_M = 0.005       # m; mean error for the pre-session check to PASS
+CALIB_CHECK_MAX_AGE_H = 12      # h; an older PASS shows as "not checked" in the start-up checks
 CALIB_LENS_EDGE_RATIO = 2.0     # edge boards fitting this much worse than centre ones -> lens hint
 CALIB_CHECK_NEAR_M = None       # m; MEASURED: the taped check spot (set on APPLY)
 CALIB_CHECK_LATERAL_M = None    # m; MEASURED: the taped check spot (set on APPLY)
@@ -166,6 +173,8 @@ KD_YAW = 0.004                  # steer per deg/s
 STEER_SMOOTH = 0.5              # 0 = none, near 1 = heavy
 STEER_MAX = 0.6                 # steer
 LANE_STEER_SPEED_RATIO = 0.7    # lane |steer| <= this x speed; below 1 the inner wheel never reverses
+LANE_GAIN_SPEED_SCALING = False # scale lateral/heading gains by CRUISE_SPEED / speed; on after tuning in lane_sim
+LANE_GAIN_MIN_SPEED = 0.2       # 0-1; speed floor for that scaling
 REACQUIRE_CONF = 0.6
 REACQUIRE_FRAMES = 5
 CAM_GAP_WARN_M = 0.03           # m
@@ -227,6 +236,30 @@ LEFT_INVERT = True              # confirmed on the bench
 RIGHT_INVERT = True             # confirmed on the bench
 STEER_GAIN = 1.0
 MOTOR_DEADBAND = 0.15           # 0-1; software lift so small commands still move the wheels
+
+# ---------------------------------------------------------------- steering response (tools/steer_test.py)
+# MEASURED by the steering test and written there on APPLY. Per-speed values
+# are {speed: value} dicts (speed 0-1), interpolated between speeds.
+STEER_YAW_DPS_PER_UNIT = None   # MEASURED: {speed: deg/s per unit steer}; sim and gain choice
+STEER_DEADBAND = 0.0            # MEASURED: steer the robot needs before it turns while driving; mix()
+STEER_DEADBAND_RAMP = 0.02      # steer over which the deadband lift is blended in (no twitch at 0)
+STEER_TRIM = None               # MEASURED: {speed: steer that drives straight}; mix()
+MOTOR_DEAD_TIME_S = None        # MEASURED: s from command to first movement; sim
+MOTOR_LAG_S = None              # MEASURED: s, first-order time constant of the yaw response; sim
+CAMERA_LATENCY_S = None         # MEASURED: s from motion to the lane estimate in the loop; sim
+SPEED_MPS_PER_UNIT = None       # MEASURED: forward m/s per unit of speed command; sim, lane filter
+STEER_TEST_SPEEDS = (0.3, 0.5, 0.7)        # driving speeds tested (speed 0 = pivot is always tested)
+STEER_TEST_STEERS = (0.05, 0.1, 0.2, 0.3)  # steer sizes; each is run left then right
+STEER_TEST_LEAD_S = 0.7         # s straight before each steer pair (baseline)
+STEER_TEST_HOLD_S = 1.2         # s per steer step
+STEER_TEST_SETTLE_S = 0.5       # s stopped between pivot steps
+STEER_TEST_STEADY_S = 0.5       # s at the end of a step averaged as its steady yaw rate
+STEER_TEST_STRAIGHT_S = 3.0     # s of each straight run (speed and trim)
+STEER_TEST_MOVE_DPS = 5.0       # deg/s; a step turning less than this is inside the deadband
+STEER_TEST_TURN_MARGIN = 0.05   # steer added to the pivot deadband for TURN_MIN_STEER
+STEER_TEST_ASYM_WARN = 0.15     # left/right gain difference (fraction) worth a warning
+STEER_TEST_LATENCY_MAX_S = 0.4  # s; camera latency search range
+STEER_TEST_IMU_POLL_HZ = 200    # Hz; the test reads every IMU sample at this rate
 
 # ---------------------------------------------------------------- display and health
 

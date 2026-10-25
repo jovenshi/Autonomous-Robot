@@ -209,6 +209,74 @@ def test_missing_bands_raise(monkeypatch):
         lane_obs(scene())
 
 
+# ---------------------------------------------------------------- search window and robust fit
+
+def band_rows(i):
+    return BANDS[i][0], BANDS[i][1]
+
+
+def with_blob(img, rows, x0, x1):
+    out = img.copy()
+    out[rows[0]:rows[1], x0:x1] = YELLOW
+    return out
+
+
+def tracked_obs(img, tracker, t):
+    frame = Frame(image=img, t=t, seq=1, cam_id="front")
+    return front_lane.process_front_lane(color.make_front_masks(frame, config), config, t, 1,
+                                         tracker)
+
+
+def test_stray_yellow_in_one_band_is_dropped():
+    # A yellow patch beside the line in band 3 drags that band's centroid
+    # about 25 px (5 cm) off; the fit drops it and stays on the line.
+    obs = lane_obs(with_blob(scene(), band_rows(2), int(CX) + 40, int(CX) + 70))
+    assert len(obs.centre_pts_px) == 4
+    assert obs.lateral_m == pytest.approx(0.0, abs=0.002)
+    assert obs.conf < 0.9                                  # a dropped band costs conf
+
+
+def test_crossing_line_is_ignored_inside_the_window():
+    # Line 4 cm left of the axle; a crossing line spans the whole far band.
+    line = lambda y: CX + 20
+    crossing = with_blob(scene(line_x=line), band_rows(0), 0, W)
+    untracked = lane_obs(crossing)
+    assert len(untracked.centre_pts_px) == 4               # far band dropped as an outlier
+    tracker = front_lane.LaneTracker()
+    tracked_obs(scene(line_x=line), tracker, 1.0)          # a clean frame sets the window
+    obs = tracked_obs(crossing, tracker, 1.03)
+    assert len(obs.centre_pts_px) == 5                     # windowed centroid stays on the line
+    assert obs.lateral_m == pytest.approx(-0.04, abs=0.003)
+
+
+def test_line_outside_the_window_falls_back_to_road_edges():
+    tracker = front_lane.LaneTracker()
+    tracked_obs(scene(), tracker, 1.0)
+    obs = tracked_obs(scene(line_x=lambda y: CX + 50), tracker, 1.03)   # jumped 10 cm
+    assert obs.lateral_m == pytest.approx(-0.10, abs=0.006)
+
+
+def test_window_needs_a_recent_confident_fit():
+    tracker = front_lane.LaneTracker()
+    assert tracker.window_fit(1.0, config) is None
+    tracker.update((0.0, 0.01), config.LANE_SEARCH_MIN_CONF - 0.01, 1.0, config)
+    assert tracker.window_fit(1.0, config) is None         # not confident enough
+    tracker.update((0.0, 0.01), 0.9, 1.0, config)
+    assert tracker.window_fit(1.0 + config.LANE_SEARCH_MAX_AGE_S, config) == (0.0, 0.01)
+    assert tracker.window_fit(1.01 + config.LANE_SEARCH_MAX_AGE_S, config) is None
+
+
+def test_fit_robust_weights_and_keeps_a_minimum():
+    pts = [(0.2, 0.0), (0.3, 0.0), (0.4, 0.0), (0.5, 0.05)]
+    fit, kept = front_lane.fit_robust(pts, [1, 1, 1, 1], config)
+    assert kept == [0, 1, 2] and fit == pytest.approx((0.0, 0.0), abs=1e-9)
+    fit, kept = front_lane.fit_robust(pts[:3], [1, 1, 1], config)
+    assert kept == [0, 1, 2]                               # never below LANE_MIN_KEEP
+    even = front_lane.fit_robust([(0.2, 0.0), (0.4, 0.01)], [1, 1], config)[0]
+    light = front_lane.fit_robust([(0.2, 0.0), (0.3, 0.01), (0.4, 0.0)], [1, 0.01, 1], config)[0]
+    assert even[0] == pytest.approx(0.05) and light[1] == pytest.approx(0.0, abs=0.001)
+
+
 # ---------------------------------------------------------------- pipeline.py
 
 def test_process_front_frame():

@@ -14,8 +14,8 @@ def drive_for_state(state, est, imu, behaviour, lane_ctrl, front, cfg):
     if state in _STOPPED_STATES:
         return DriveCmd(speed=0.0, steer=0.0)
     if state in _LANE_STATES:
-        steer = lane_ctrl.update(est, _yaw_rate(imu), 1.0 / cfg.CONTROL_HZ)
         speed = target_speed(state, est, cfg)
+        steer = lane_ctrl.update(est, _yaw_rate(imu), 1.0 / cfg.CONTROL_HZ, speed)
         return DriveCmd(speed=speed, steer=_arc_limit(steer, speed, cfg))
     raise NotImplementedError(f"drive_for_state: {state.name} is wired with state_machine.py")
 

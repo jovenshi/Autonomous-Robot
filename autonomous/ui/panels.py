@@ -88,8 +88,10 @@ def draw_preflight(img, rect, checks, size=22):
     # Go/no-go list with drawn ticks and crosses.
     x, y, w, h = rect
     _label(img, (x, y + 16), "PRE-FLIGHT")
+    step = min(int(size * 1.7), (h - 16) // max(1, len(checks)))   # fit every row in rect
+    size = min(size, int(step / 1.5))
     for i, (label, ok) in enumerate(checks):
-        row_y = y + 16 + (i + 1) * int(size * 1.7)
+        row_y = y + 16 + (i + 1) * step
         draw_mark(img, (x + 12, row_y - size // 3), ok, size // 2)
         draw_text(img, label, (x + 34, row_y), size, TEXT if ok else RED)
 
@@ -171,9 +173,10 @@ def health_rows(packet):
 
 # ---------------------------------------------------------------- pre-flight
 
-def preflight(packet, cfg):
+def preflight(packet, cfg, camera=None):
     # Go/no-go list from the packet: [(label, ok)]. Informational only;
-    # Behaviour decides whether START is accepted.
+    # Behaviour decides whether START is accepted. camera: (ok, text) from
+    # tools/calib_status.check_status, added last when given.
     imu = packet.imu
     checks = [("IMU valid", imu is not None and imu.valid),
               ("gyro calibrated", imu is not None and imu.calib_gyro == 3)]
@@ -182,6 +185,8 @@ def preflight(packet, cfg):
     if not packet.fps:
         checks.append(("camera fps", False))
     checks.append(("motor serial", HealthWarning.MOTOR_SERIAL_ERROR not in packet.warnings))
+    if camera is not None:
+        checks.append((camera[1], camera[0]))
     return checks
 
 

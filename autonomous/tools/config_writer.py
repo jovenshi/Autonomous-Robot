@@ -34,6 +34,8 @@ def format_value(name, value):
 
 def _plain(value):
     # repr with NumPy scalars turned into plain Python numbers.
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_plain(k)}: {_plain(v)}" for k, v in value.items()) + "}"
     if isinstance(value, (list, tuple)):
         inner = ", ".join(_plain(v) for v in value)
         if isinstance(value, tuple):

@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import config  # noqa: E402
 from robot_types import LatestValue  # noqa: E402
-from tools import calibrate, config_writer  # noqa: E402
+from tools import calib_status, calibrate, config_writer  # noqa: E402
 from tools.guide_draw import (Button, Zone, clip_text, draw_adjuster,  # noqa: E402
                               draw_banner, draw_column, draw_level_line, draw_paragraph,
                               draw_steps, fit_image, hit, say)
@@ -455,6 +455,9 @@ class CalibApp:
             self.selected = name[4:]
         elif name == "apply":
             self.applied_backup = self._apply(calibrate.fit_config_values(self.result))
+            check = self.result.get("check")
+            calib_status.record_check(self.cfg, bool(check and check["passed"]),
+                                      check["rms_m"] if check else None, "session")
             self.go("applied")
         elif name == "retake" and self.selected:
             self.spot = int(self.selected[6:8]) - 1
@@ -533,6 +536,8 @@ class CalibApp:
             return
         for level, text in calibrate.check_lines(self.check_result, self.cfg):
             say(TAG, text)
+        calib_status.record_check(self.cfg, self.check_result["passed"],
+                                  self.check_result["rms_m"], "check")
         self.capture = BoardView(view.image.copy(), None, view.t)
         self.go("check_result")
 

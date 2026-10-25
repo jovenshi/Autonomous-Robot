@@ -31,8 +31,10 @@ from hal.exposure import ExposureControl
 from hal.imu import ImuReader
 from hal.sabertooth import SabertoothDriver
 from loop_log import LoopLog
+from perception.front_lane import LaneTracker
 from perception.pipeline import process_front_frame
 from robot_types import LatestValue, State, UiCommand
+from tools.calib_status import startup_line
 from ui.link import make_ui_packet, read_commands, send, start_ui, stop_ui
 
 _LANE_STATES = (State.LANE_FOLLOW, State.APPROACH, State.REACQUIRE)
@@ -71,7 +73,7 @@ def build_system(cfg):
     # IMU first (it calibrates in its own thread), then the cameras (they
     # need warm-up), then the Sabertooth.
     if cfg.FRONT_BANDS is None:
-        raise SystemExit("FRONT_BANDS is not set in config.py: run tools/calibrate.py first")
+        raise SystemExit("FRONT_BANDS is not set in config.py: run python -m tools.calib_ui first")
     signs_enabled, exposure_hold = threading.Event(), threading.Event()
     exposure_hold.set()                               # robot starts in IDLE
     drift_request = threading.Event()
@@ -111,9 +113,10 @@ def _build_front_camera(cfg, slot, signs_enabled, exposure_hold):
     # Starts the front camera thread and locks exposure after warm-up.
     source = CsiSource(cfg.FRONT_CAM_NUM, cfg.FRONT_SIZE, cfg)
     exposure = ExposureControl(source, "front", cfg)
+    tracker = LaneTracker()                          # search window, camera thread only
 
     def process(frame):
-        result = process_front_frame(frame, signs_enabled.is_set(), cfg)
+        result = process_front_frame(frame, signs_enabled.is_set(), cfg, tracker)
         exposure.manage_step(result.mean_v, exposure_hold.is_set())
         return result
 
@@ -275,6 +278,7 @@ def shutdown(sys):
 def main():
     system = None
     try:
+        print(startup_line(config))
         system = build_system(config)
         print("Ready. Enter = START, s + Enter = STOP, Ctrl-C = quit")
         run(system)

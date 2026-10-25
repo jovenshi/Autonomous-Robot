@@ -745,6 +745,8 @@ def main(argv=None):
                 raise SystemExit(f"Cannot read {args.image}")
             errors = check_photo(image, config, args.near_m, args.lateral_m)
             print_lines(check_lines(errors, config))
+            from tools.calib_status import record_check
+            record_check(config, errors["passed"], errors["rms_m"], "check")
             return
         values = run_fit(args, config) if args.command == "fit" else run_lens(args, config)
     except ValueError as e:

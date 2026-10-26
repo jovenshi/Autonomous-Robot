@@ -147,7 +147,7 @@ def test_band_centre_ignores_yellow_grass_beside_road():
     masks.yellow[:, 98:104] = 255                                    # the line, on the road
     masks.yellow[:, 0:50] = 255                                      # grass passing the yellow test
     band = (0, 20, 1.0, 40, 0.002)
-    assert front_lane._band_centre_x(masks, band, 99.5, config) == pytest.approx(100.5)
+    assert front_lane._band_centre_x(masks, band, 99.5, config) == (pytest.approx(100.5), True)
 
 
 def test_find_yellow_x_ignores_stray_specks():
@@ -192,19 +192,17 @@ def test_fit_needs_two_distinct_points():
     assert front_lane.fit_centre_line([(0.2, 0.0), (0.2, 0.1)]) is None
 
 
-def test_drop_outliers_removes_far_point_only():
+def test_fit_robust_removes_far_point_only():
     pts = [(0.7, 0.0), (0.8, 0.0), (0.9, 0.0), (1.0, 0.3), (1.1, 0.0)]
-    px = [(i, i) for i in range(5)]
-    fit, kept, kept_px = front_lane.drop_outliers(
-        front_lane.fit_centre_line(pts), pts, px, 0.05)
-    assert len(kept) == 4 and (1.0, 0.3) not in kept and (3, 3) not in kept_px
+    fit, kept = front_lane.fit_robust(pts, [1] * 5, config)
+    assert kept == [0, 1, 2, 4]
     assert fit[0] == pytest.approx(0.0, abs=1e-9) and fit[1] == pytest.approx(0.0, abs=1e-9)
     # A far point with leverage pulls the plain fit onto itself; still dropped.
     lever = [(0.7, 0.0), (0.8, 0.0), (0.9, 0.0), (1.7, -0.4)]
-    fit, kept, _ = front_lane.drop_outliers(front_lane.fit_centre_line(lever), lever, px[:4], 0.05)
-    assert (1.7, -0.4) not in kept and fit[0] == pytest.approx(0.0, abs=1e-9)
-    clean = [(0.7, 0.01), (0.8, 0.0), (0.9, -0.01)]
-    assert front_lane.drop_outliers(front_lane.fit_centre_line(clean), clean, px[:3], 0.05)[1] == clean
+    fit, kept = front_lane.fit_robust(lever, [1] * 4, config)
+    assert kept == [0, 1, 2] and fit[0] == pytest.approx(0.0, abs=1e-9)
+    clean = [(0.7, 0.005), (0.8, 0.0), (0.9, -0.005), (1.0, 0.0)]
+    assert front_lane.fit_robust(clean, [1] * 4, config)[1] == [0, 1, 2, 3]
 
 
 # ---------------------------------------------------------------- process_front_lane
@@ -251,6 +249,81 @@ def test_missing_bands_raise(monkeypatch):
     monkeypatch.setattr(config, "FRONT_BANDS", None)
     with pytest.raises(ValueError):
         lane_obs(scene())
+
+
+# ---------------------------------------------------------------- search window and robust fit
+
+def band_rows(i):
+    return BANDS[i][0], BANDS[i][1]
+
+
+def with_blob(img, rows, x0, x1):
+    out = img.copy()
+    out[rows[0]:rows[1], x0:x1] = YELLOW
+    return out
+
+
+def tracked_obs(img, tracker, t):
+    frame = Frame(image=img, t=t, seq=1, cam_id="front")
+    return front_lane.process_front_lane(color.make_front_masks(frame, config), config, t, 1,
+                                         tracker)
+
+
+def test_stray_yellow_in_one_band_is_ignored():
+    # A yellow patch beside the line in band 3: the densest-window centroid
+    # stays on the line, so the band is kept and the fit stays on the line.
+    obs = lane_obs(with_blob(scene(), band_rows(2), int(CX) + 40, int(CX) + 70))
+    assert len(obs.centre_pts_px) == 5
+    assert obs.lateral_m == pytest.approx(0.0, abs=0.002)
+
+
+def test_band_dragged_off_the_line_is_dropped():
+    # A band whose point lands 5 cm off the line (e.g. locked onto grass in
+    # a dash gap) is dropped by the fit, and costs conf.
+    pts = [(0.8, 0.0), (0.9, 0.0), (1.0, 0.05), (1.1, 0.0), (1.2, 0.0)]
+    fit, kept = front_lane.fit_robust(pts, [1] * 5, config)
+    assert kept == [0, 1, 3, 4] and fit[1] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_crossing_line_is_ignored_inside_the_window():
+    # Line 4 cm left of the axle; a crossing line spans the whole far band.
+    line = lambda y: CX + 20
+    crossing = with_blob(scene(line_x=line), band_rows(0), 0, W)
+    untracked = lane_obs(crossing)
+    assert len(untracked.centre_pts_px) == 4               # far band dropped as an outlier
+    tracker = front_lane.LaneTracker()
+    tracked_obs(scene(line_x=line), tracker, 1.0)          # a clean frame sets the window
+    obs = tracked_obs(crossing, tracker, 1.03)
+    assert len(obs.centre_pts_px) == 5                     # windowed centroid stays on the line
+    assert obs.lateral_m == pytest.approx(-0.04, abs=0.003)
+
+
+def test_line_outside_the_window_falls_back_to_road_edges():
+    tracker = front_lane.LaneTracker()
+    tracked_obs(scene(), tracker, 1.0)
+    obs = tracked_obs(scene(line_x=lambda y: CX + 50), tracker, 1.03)   # jumped 10 cm
+    assert obs.lateral_m == pytest.approx(-0.10, abs=0.006)
+
+
+def test_window_needs_a_recent_confident_fit():
+    tracker = front_lane.LaneTracker()
+    assert tracker.window_fit(1.0, config) is None
+    tracker.update((0.0, 0.01), config.LANE_SEARCH_MIN_CONF - 0.01, 1.0, config)
+    assert tracker.window_fit(1.0, config) is None         # not confident enough
+    tracker.update((0.0, 0.01), 0.9, 1.0, config)
+    assert tracker.window_fit(1.0 + config.LANE_SEARCH_MAX_AGE_S, config) == (0.0, 0.01)
+    assert tracker.window_fit(1.01 + config.LANE_SEARCH_MAX_AGE_S, config) is None
+
+
+def test_fit_robust_weights_and_keeps_a_minimum():
+    pts = [(0.2, 0.0), (0.3, 0.0), (0.4, 0.0), (0.5, 0.05)]
+    fit, kept = front_lane.fit_robust(pts, [1, 1, 1, 1], config)
+    assert kept == [0, 1, 2] and fit == pytest.approx((0.0, 0.0), abs=1e-9)
+    fit, kept = front_lane.fit_robust(pts[:3], [1, 1, 1], config)
+    assert kept == [0, 1, 2]                               # never below LANE_MIN_KEEP
+    even = front_lane.fit_robust([(0.2, 0.0), (0.4, 0.01)], [1, 1], config)[0]
+    light = front_lane.fit_robust([(0.2, 0.0), (0.3, 0.01), (0.4, 0.0)], [1, 0.01, 1], config)[0]
+    assert even[0] == pytest.approx(0.05) and light[1] == pytest.approx(0.0, abs=0.001)
 
 
 # ---------------------------------------------------------------- pipeline.py

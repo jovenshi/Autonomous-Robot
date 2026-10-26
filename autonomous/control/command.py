@@ -22,8 +22,8 @@ def drive_for_state(state, est, imu, behaviour, lane_ctrl, front, cfg, road_yaw=
         steer = max(cfg.TURN_MIN_STEER, min(cfg.STEER_MAX, cfg.TURN_KP * abs(off)))
         return DriveCmd(speed=0.0, steer=steer if off > 0 else -steer)
     if state in _LANE_STATES:
-        steer = lane_ctrl.update(est, _yaw_rate(imu), 1.0 / cfg.CONTROL_HZ)
         speed = target_speed(state, est, cfg)
+        steer = lane_ctrl.update(est, _yaw_rate(imu), 1.0 / cfg.CONTROL_HZ, speed)
         return DriveCmd(speed=speed, steer=_arc_limit(steer, speed, cfg))
     raise NotImplementedError(f"drive_for_state: {state.name} is wired with state_machine.py")
 

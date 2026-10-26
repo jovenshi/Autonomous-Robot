@@ -27,6 +27,7 @@ from control.command import drive_for_state
 from control.lane_controller import LaneController
 from control.mixer import mix
 from estimation.lane_fusion import fuse_lane
+from perception.front_lane import LaneTracker
 from perception.pipeline import process_front_frame
 from robot_types import State
 from tools.debug_draw import draw_lane, lane_text, put_lines
@@ -35,9 +36,11 @@ from tools.recording import iter_frames
 WINDOW = "replay"
 
 
-def replay_step(frame, lane_ctrl, cfg):
+def replay_step(frame, lane_ctrl, cfg, tracker=None):
     # One frame through the robot's LANE_FOLLOW path; returns everything shown.
-    result = process_front_frame(frame, False, cfg)
+    # tracker: a LaneTracker kept across frames, so the search window works
+    # as it does on the robot.
+    result = process_front_frame(frame, False, cfg, tracker)
     lane = fuse_lane(result, None, frame.t, cfg)
     drive = drive_for_state(State.LANE_FOLLOW, lane, None, None, lane_ctrl, result, cfg)
     return result, lane, drive, mix(drive, cfg)
@@ -76,11 +79,11 @@ def handle_keys(paused, frame_wait_ms):
 
 def run(rec_dir, speed, window, cfg):
     if cfg.FRONT_BANDS is None:
-        raise SystemExit("FRONT_BANDS is not set in config.py: run tools/calibrate.py first")
-    lane_ctrl = LaneController(cfg)
+        raise SystemExit("FRONT_BANDS is not set in config.py: run python -m tools.calib_ui first")
+    lane_ctrl, tracker = LaneController(cfg), LaneTracker()
     prev_t, paused = None, False
     for frame in iter_frames(rec_dir):
-        result, _, drive, motor = replay_step(frame, lane_ctrl, cfg)
+        result, _, drive, motor = replay_step(frame, lane_ctrl, cfg, tracker)
         print(format_line(frame, result, drive, motor))
         gap_s = 0.0 if prev_t is None or speed <= 0 else (frame.t - prev_t) / speed
         prev_t = frame.t

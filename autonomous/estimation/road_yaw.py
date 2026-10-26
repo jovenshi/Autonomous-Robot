@@ -15,6 +15,14 @@ from robot_types import RoadYaw, State
 _ANCHOR_STATES = (State.LANE_FOLLOW, State.APPROACH)
 
 
+def off_road_deg(imu, road_yaw):
+    # Degrees to turn (+ = left) to face along the road again, or None
+    # without a valid IMU and road yaw.
+    if imu is None or not imu.valid or road_yaw is None or not road_yaw.valid:
+        return None
+    return road_yaw.yaw_deg - imu.yaw_deg
+
+
 class RoadYawTracker:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -27,6 +35,8 @@ class RoadYawTracker:
         if not self._can_anchor(imu, lane, state, now):
             return
         measured = imu.yaw_deg + math.degrees(lane.heading_err_rad)
+        if self._yaw_deg is not None and abs(measured - self._yaw_deg) > self.cfg.RECOVER_DEG:
+            return                     # knocked off course: the camera isn't seeing this road
         if self._yaw_deg is None:
             self._yaw_deg = measured
         else:

@@ -107,6 +107,14 @@ def test_first_anchor_then_blend():
     assert tracker.get().t_anchor == NOW + 1
 
 
+
+def test_no_anchor_from_a_road_far_off_the_known_one():
+    # Knocked 45 deg: the camera may lock onto something else; road yaw keeps.
+    tracker = RoadYawTracker(config)
+    tracker.update(imu(yaw=0.0), lane(), State.LANE_FOLLOW, NOW)
+    tracker.update(imu(yaw=45.0, t=NOW + 1), lane(), State.LANE_FOLLOW, NOW + 1)
+    assert tracker.get().yaw_deg == pytest.approx(0.0)
+
 @pytest.mark.parametrize("kwargs", [
     dict(state=State.TURN),
     dict(imu_s=imu(rate=50.0)),

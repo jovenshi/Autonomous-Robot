@@ -23,13 +23,19 @@ import numpy as np
 from robot_types import FrontLaneObs
 
 
-def find_yellow_x(yellow_band, min_px):
-    # Column centroid of yellow pixels; None if fewer than min_px.
+def find_yellow_x(yellow_band, min_px, window_px):
+    # Column centroid of the yellow pixels within window_px of the densest
+    # window of columns, so stray specks elsewhere in the band (grass that
+    # passes the yellow test) don't pull it; None if fewer than min_px there.
     col_counts = np.count_nonzero(yellow_band, axis=0)
-    total = int(col_counts.sum())
+    density = np.convolve(col_counts, np.ones(2 * window_px + 1), mode="same")
+    peak = int(np.argmax(density))
+    lo, hi = max(peak - window_px, 0), min(peak + window_px + 1, col_counts.size)
+    counts = col_counts[lo:hi]
+    total = int(counts.sum())
     if total < min_px:
         return None
-    return float((col_counts * np.arange(col_counts.size)).sum() / total)
+    return float((counts * np.arange(lo, hi)).sum() / total)
 
 
 def find_road_edges(road_band, seed_x, min_px, cfg):
@@ -81,6 +87,31 @@ def fit_centre_line(points_m):
     return float(slope), float(intercept)
 
 
+def drop_outliers(fit, points_m, points_px, max_off_m):
+    # While 3+ points would remain: finds the band point whose removal leaves
+    # the best fit, and drops it if it is more than max_off_m off the line
+    # through the others (a band that locked onto grass in a dash gap).
+    # Judging against a fit without the point stops a far point dragging the
+    # line onto itself. Returns (fit, points_m, points_px).
+    while fit is not None and len(points_m) > 3:
+        best_rms, worst, off = None, None, 0.0
+        for i, (fwd, lat) in enumerate(points_m):
+            others = points_m[:i] + points_m[i + 1:]
+            others_fit = fit_centre_line(others)
+            if others_fit is None:
+                continue
+            rms = fit_rms(others, others_fit)
+            if best_rms is None or rms < best_rms:
+                best_rms, worst = rms, i
+                off = abs(lat - (others_fit[0] * fwd + others_fit[1]))
+        if worst is None or off <= max_off_m:
+            break
+        points_m = points_m[:worst] + points_m[worst + 1:]
+        points_px = points_px[:worst] + points_px[worst + 1:]
+        fit = fit_centre_line(points_m)
+    return fit, points_m, points_px
+
+
 def line_to_errors(fit):
     # Lateral error at forward = 0 (the rear axle) and heading error from
     # the slope, signed per the conventions above.
@@ -111,6 +142,7 @@ def process_front_lane(masks, cfg, t, seq):
         points_m.append(band_to_ground(x, band, img_cx))
 
     fit = fit_centre_line(points_m)
+    fit, points_m, points_px = drop_outliers(fit, points_m, points_px, cfg.FRONT_OUTLIER_M)
     if fit is None:
         return FrontLaneObs(None, None, 0.0, tuple(points_px), None, t, seq)
     lateral_m, heading_err_rad = line_to_errors(fit)
@@ -119,11 +151,37 @@ def process_front_lane(masks, cfg, t, seq):
     return FrontLaneObs(lateral_m, heading_err_rad, conf, tuple(points_px), line_px, t, seq)
 
 
+def road_span(road_band, min_px, cfg):
+    # (start, end) columns of the widest stretch of road in the band, with
+    # gaps up to ROAD_LINE_GAP_PX bridged so the line doesn't split it;
+    # None if no stretch is min_px wide.
+    rows = road_band.shape[0]
+    is_road = np.count_nonzero(road_band, axis=0) >= cfg.ROAD_COL_FRAC * rows
+    if not is_road.any():
+        return None
+    is_road = _bridge_gaps(is_road, cfg.ROAD_LINE_GAP_PX)
+    padded = np.concatenate(([False], is_road, [False])).astype(np.int8)
+    changes = np.diff(padded)
+    starts = np.flatnonzero(changes == 1)
+    ends = np.flatnonzero(changes == -1) - 1
+    widest = int(np.argmax(ends - starts))
+    if ends[widest] - starts[widest] + 1 < min_px:
+        return None
+    return int(starts[widest]), int(ends[widest])
+
+
 def _band_centre_x(masks, band, img_cx, cfg):
     # The line's column in one band, from yellow or from the road edges.
+    # Only yellow on the road counts, so grass that passes the yellow test
+    # can't be taken for the line; the whole band is used if no road is found.
     y_top, y_bottom, _, half_road_px, _ = band
     yellow_band = masks.yellow[y_top:y_bottom]
-    yellow_x = find_yellow_x(yellow_band, cfg.MIN_LINE_PX)
+    span = road_span(masks.road[y_top:y_bottom], cfg.MIN_LINE_PX, cfg)
+    if span is not None:
+        on_road = np.zeros_like(yellow_band)
+        on_road[:, span[0]:span[1] + 1] = yellow_band[:, span[0]:span[1] + 1]
+        yellow_band = on_road
+    yellow_x = find_yellow_x(yellow_band, cfg.MIN_LINE_PX, cfg.LINE_WINDOW_PX)
     road_or_line = cv2.bitwise_or(masks.road[y_top:y_bottom], yellow_band)
     seed_x = yellow_x if yellow_x is not None else img_cx
     left_x, right_x = find_road_edges(road_or_line, seed_x, cfg.MIN_LINE_PX, cfg)
@@ -149,8 +207,9 @@ def _line_ends_px(fit, bands, img_cx):
 
 def _bridge_gaps(is_road, gap_px):
     # Closes gaps up to gap_px columns wide in a row of booleans.
+    # The kernel width is kept odd: an even one shifts the result by a pixel.
     row = is_road.astype(np.uint8)[np.newaxis, :]
-    kernel = np.ones((1, gap_px + 1), np.uint8)
+    kernel = np.ones((1, (gap_px + 1) | 1), np.uint8)
     closed = cv2.morphologyEx(row, cv2.MORPH_CLOSE, kernel, borderType=cv2.BORDER_REPLICATE)
     return closed[0].astype(bool)
 

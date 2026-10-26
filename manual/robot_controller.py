@@ -23,7 +23,7 @@ from sabertooth import SabertoothDriver
 from ps5_controller import PS5_Controller
 
 # Throttle ramps in units per second, so they feel the same at any loop rate
-ACCEL_RATE = 1.25   # speeding up (lower = gentler)
+ACCEL_RATE = 1.0   # speeding up (lower = gentler)
 DECEL_RATE = 2.0    # slowing down or reversing
 
 # Steering. Full stick gives PIVOT_TURN at low speed (spin in place when stopped), rising

@@ -163,7 +163,7 @@ def control_step(sys, now):
     if state in _LANE_STATES and state != sys.prev_state:
         sys.lane_ctrl.reset()
 
-    drive = drive_for_state(state, lane, imu, sys.behaviour, sys.lane_ctrl, front, cfg)
+    drive = drive_for_state(state, lane, imu, sys.behaviour, sys.lane_ctrl, front, cfg, road_yaw)
     motor = mix(drive, cfg)
     sys.saber.set(motor)                             # every loop, or the timeout stops the motors
     sys.last_drive = drive

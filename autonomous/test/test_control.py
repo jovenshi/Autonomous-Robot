@@ -21,7 +21,7 @@ from control.lane_controller import LaneController
 from control.mixer import mix
 from control.speed_governor import target_speed
 from control.turn_controller import hold_steer, turn_done, turn_steer, vision_turn_steer
-from robot_types import (DriveCmd, FrontLaneObs, FrontResult, ImuSample, LaneEstimate,
+from robot_types import (DriveCmd, FrontLaneObs, FrontResult, ImuSample, LaneEstimate, RoadYaw,
                          State)
 
 
@@ -216,3 +216,29 @@ def test_missing_or_invalid_imu_steers_like_kd_yaw_zero(monkeypatch, no_smoothin
     kd_zero = drive_for_state(State.LANE_FOLLOW, e, turning, None,
                               LaneController(config), None, config).steer
     assert without == kd_zero
+
+
+# ---------------------------------------------------------------- recovery from a knock
+
+def test_knocked_off_pivots_back_toward_road():
+    road = RoadYaw(yaw_deg=0.0, t_anchor=0.0, valid=True)
+    pointing_right = ImuSample(-45.0, 0.0, True, 3, 0.0, 0.0)       # road is 45 deg to the left
+    drive = drive_for_state(State.LANE_FOLLOW, est(conf=0.0), pointing_right, None,
+                            LaneController(config), None, config, road)
+    assert drive.speed == 0.0 and drive.steer == pytest.approx(config.STEER_MAX)
+    pointing_left = ImuSample(25.0, 0.0, True, 3, 0.0, 0.0)
+    drive = drive_for_state(State.LANE_FOLLOW, est(conf=0.0), pointing_left, None,
+                            LaneController(config), None, config, road)
+    assert drive.speed == 0.0 and drive.steer < -config.TURN_MIN_STEER + 1e-9
+
+
+def test_small_heading_change_keeps_lane_following():
+    road = RoadYaw(yaw_deg=0.0, t_anchor=0.0, valid=True)
+    slightly = ImuSample(-10.0, 0.0, True, 3, 0.0, 0.0)
+    drive = drive_for_state(State.LANE_FOLLOW, est(), slightly, None,
+                            LaneController(config), None, config, road)
+    assert drive.speed > 0.0
+    unanchored = RoadYaw(yaw_deg=0.0, t_anchor=0.0, valid=False)
+    far = ImuSample(-45.0, 0.0, True, 3, 0.0, 0.0)
+    assert drive_for_state(State.LANE_FOLLOW, est(), far, None, LaneController(config), None,
+                           config, unanchored).speed > 0.0

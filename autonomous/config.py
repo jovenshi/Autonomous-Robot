@@ -34,7 +34,11 @@ CAM_FPS_WINDOW_S = 1.0          # s; window over which fps() is measured
 
 # MEASURED: 5 bands of (y_top, y_bottom, forward_m from the rear axle,
 # half_road_px, m_per_px); y values in FRONT_LANE_SIZE pixels.
+# The first 2 bands are EXTRAPOLATED from the 5 measured ones (flat-floor
+# fit), not calibrated; redo tools/calibrate.py with --top-row to replace them.
 FRONT_BANDS = [
+    (91, 107, 1.6591, 52, 0.003004),
+    (112, 128, 1.3561, 63, 0.002453),
     (133, 149, 1.1471, 75, 0.002073),
     (154, 170, 0.9941, 86, 0.001795),
     (175, 191, 0.8774, 98, 0.001583),
@@ -48,9 +52,12 @@ SIDE_TARGET_PX = None           # MEASURED: edge column with the robot centred o
 SIDE_M_PER_PX = None            # MEASURED: m/px
 SIDE_CAM_X_M = None             # MEASURED: m; + = ahead of the rear axle
 MIN_LINE_PX = 30                # pixels per band
+LINE_WINDOW_PX = 10             # px (lane size); yellow is only counted this close to its densest column
 ROAD_COL_FRAC = 0.5             # a band column counts as road if this fraction of its rows is road
 ROAD_GAP_MAX_PX = 8             # gaps in the road this narrow (px, lane size) are bridged
+ROAD_LINE_GAP_PX = 25           # px (lane size); wider than the line, so the road span bridges it
 FRONT_FIT_RMS_MAX_M = 0.03      # m; fit error at which front lane conf falls to 0
+FRONT_OUTLIER_M = 0.05          # m; a band point this far off the fitted line is dropped
 
 # ---------------------------------------------------------------- exposure and lighting
 
@@ -76,12 +83,12 @@ BRIGHT_WARN_V = 220             # 0-255
 # ---------------------------------------------------------------- colour tests (TUNED)
 # From the test
 YELLOW_H_MIN = 21
-YELLOW_H_MAX = 33
+YELLOW_H_MAX = 30
 YELLOW_S_MIN = 116
 YELLOW_V_MIN = 72
-ROAD_S_MAX = 106
-ROAD_V_T_MIN = 55
-ROAD_V_T_MAX = 158
+ROAD_S_MAX = 100
+ROAD_V_T_MIN = 51
+ROAD_V_T_MAX = 142
 
 GREEN_CHROM_MIN = 0.40          # G / (R+G+B)
 DARK_SUM_MIN = 90               # R+G+B; below = too dark to judge
@@ -114,7 +121,7 @@ STOP_HOLD_S = 3.0               # s
 
 # ---------------------------------------------------------------- speeds and lane control
 
-CRUISE_SPEED = 0.6              # 0-1
+CRUISE_SPEED = 0.2              # 0-1
 APPROACH_SPEED = 0.3
 CROSS_SPEED = 0.3
 REACQUIRE_SPEED = 0.3
@@ -131,6 +138,8 @@ FUSE_GAP_MIN_CONF = 0.6         # both cameras need this conf before cam_gap_m i
 SPEED_MIN_SCALE = 0.4           # lowest fraction of base speed from low conf or large heading error
 SPEED_HEADING_SLOW_RAD = 0.35   # rad (~20 deg); heading error at which speed reaches SPEED_MIN_SCALE
 LANE_CONF_WARN = 0.4            # fused lane conf below this -> LANE_CONF_LOW
+RECOVER_DEG = 20                # deg off the road's direction (IMU) at which the robot pivots back
+RECOVER_TIMEOUT_S = 3.0         # s; SAFE_STOP if the pivot back takes longer
 
 # ---------------------------------------------------------------- turns and junction crossing
 

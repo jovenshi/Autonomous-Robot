@@ -9,6 +9,7 @@ APPROACH, DECIDE, STOP_HOLD, TURN, CROSS and REACQUIRE raise until their
 inputs exist (intersection.py, signs.py, sign_voter.py, the IMU reader).
 choose_action is complete, ready for DECIDE.
 """
+from estimation.road_yaw import off_road_deg
 from robot_types import Action, SignType, State, UiCommand
 
 # States where the robot is moving and must keep seeing the lane.
@@ -34,6 +35,7 @@ class Behaviour:
         self.stop_reason = None            # why SAFE_STOP was entered
         self._start_requested = False
         self._lane_seen_t = 0.0
+        self._recover_t = None             # when the current pivot back to the road began
         self._enter(State.IDLE, 0.0)
 
     def step(self, front, side, lane, road_yaw, sign, imu, commands, motor_error, now):
@@ -42,6 +44,17 @@ class Behaviour:
             return self.state
         if lane is not None and lane.lateral_err_m is not None:
             self._lane_seen_t = now
+        if self._recovering(imu, road_yaw, now):
+            # Pivoting back to the road (control/command.py): the line is
+            # expected to be out of view, for up to RECOVER_TIMEOUT_S.
+            if self._recover_t is None:
+                self._recover_t = now
+            if now - self._recover_t > self.cfg.RECOVER_TIMEOUT_S:
+                self._enter(State.SAFE_STOP, now, "could not turn back to the road")
+                return self.state
+            self._lane_seen_t = now
+        else:
+            self._recover_t = None
         if self.state in _MOVING_STATES:
             reason = self._check_safety(lane, imu, motor_error, now)
             if reason is not None:
@@ -65,6 +78,14 @@ class Behaviour:
             if self.state == State.IDLE:
                 self._start_requested = True
         return False
+
+    def _recovering(self, imu, road_yaw, now):
+        # True while knocked more than RECOVER_DEG off the road's direction
+        # in a lane state, with a fresh IMU to steer back by.
+        if self.state not in _LANE_STATES or imu is None or now - imu.t > self.cfg.MAX_OBS_AGE_S:
+            return False
+        off = off_road_deg(imu, road_yaw)
+        return off is not None and abs(off) > self.cfg.RECOVER_DEG
 
     def _check_safety(self, lane, imu, motor_error, now):
         # Reason to stop, or None.

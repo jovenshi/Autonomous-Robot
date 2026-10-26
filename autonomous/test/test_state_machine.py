@@ -199,3 +199,32 @@ def test_low_score_stays_in_lane_follow(b):
 ])
 def test_choose_action(sign, stop_done, action):
     assert choose_action(sign, stop_done, config) == action
+
+
+# ---------------------------------------------------------------- recovery from a knock
+
+def test_pivot_back_suspends_lane_lost_until_timeout(b):
+    from robot_types import RoadYaw
+    road = RoadYaw(yaw_deg=0.0, t_anchor=0.0, valid=True)
+    start(b, 1.0)
+    t = 1.1
+    while t < 1.1 + config.RECOVER_TIMEOUT_S - 0.1:                  # line out of view, but pivoting
+        knocked = ImuSample(45.0, 0.0, True, 3, 0.0, t)
+        assert b.step(None, None, lane(ok=False, t=t), road, None, knocked, [], False, t) \
+            == State.LANE_FOLLOW
+        t += 0.1
+    t = 1.1 + config.RECOVER_TIMEOUT_S + 0.2
+    knocked = ImuSample(45.0, 0.0, True, 3, 0.0, t)
+    assert b.step(None, None, lane(ok=False, t=t), road, None, knocked, [], False, t) \
+        == State.SAFE_STOP
+    assert b.stop_reason == "could not turn back to the road"
+
+
+def test_lane_lost_still_stops_when_facing_the_road(b):
+    from robot_types import RoadYaw
+    road = RoadYaw(yaw_deg=0.0, t_anchor=0.0, valid=True)
+    start(b, 1.0)
+    t = 1.1 + config.LANE_LOST_TIMEOUT_S + 0.1
+    straight = ImuSample(5.0, 0.0, True, 3, 0.0, t)
+    assert b.step(None, None, lane(ok=False, t=t), road, None, straight, [], False, t) \
+        == State.SAFE_STOP

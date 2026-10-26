@@ -5,6 +5,7 @@ Run from the robot/ folder:  python -m pytest tests
 """
 import math
 import sys
+import types
 
 import cv2
 import numpy as np
@@ -125,8 +126,36 @@ def test_lane_roi_from_bands():
 def test_find_yellow_x_centroid_and_minimum():
     band = np.zeros((10, 50), np.uint8)
     band[:, 20:24] = 255
-    assert front_lane.find_yellow_x(band, 30) == pytest.approx(21.5)
-    assert front_lane.find_yellow_x(band[:2, :], 30) is None      # 8 px < 30
+    assert front_lane.find_yellow_x(band, 30, 10) == pytest.approx(21.5)
+    assert front_lane.find_yellow_x(band[:2, :], 30, 10) is None      # 8 px < 30
+
+
+def test_road_span_bridges_line_and_picks_widest():
+    road = np.zeros((10, 150), np.uint8)
+    road[:, 30:50] = 255                                             # road, line at 50-59,
+    road[:, 60:80] = 255                                             # then road again
+    road[:, 120:126] = 255                                           # a small dark patch, far off
+    assert front_lane.road_span(road, 30, config) == (30, 79)
+    assert front_lane.road_span(np.zeros((10, 100), np.uint8), 30, config) is None
+
+
+def test_band_centre_ignores_yellow_grass_beside_road():
+    masks = types.SimpleNamespace(yellow=np.zeros((20, 200), np.uint8),
+                                  road=np.zeros((20, 200), np.uint8))
+    masks.road[:, 60:140] = 255
+    masks.road[:, 98:104] = 0
+    masks.yellow[:, 98:104] = 255                                    # the line, on the road
+    masks.yellow[:, 0:50] = 255                                      # grass passing the yellow test
+    band = (0, 20, 1.0, 40, 0.002)
+    assert front_lane._band_centre_x(masks, band, 99.5, config) == pytest.approx(100.5)
+
+
+def test_find_yellow_x_ignores_stray_specks():
+    band = np.zeros((10, 50), np.uint8)
+    band[:, 20:24] = 255
+    band[2, 45:48] = 255                                             # specks far from the line
+    band[7, 2] = 255
+    assert front_lane.find_yellow_x(band, 30, 5) == pytest.approx(21.5)
 
 
 def test_road_edges_ignore_dark_floor_beyond_grass():
@@ -161,6 +190,21 @@ def test_line_to_errors_signs():
 def test_fit_needs_two_distinct_points():
     assert front_lane.fit_centre_line([(0.2, 0.0)]) is None
     assert front_lane.fit_centre_line([(0.2, 0.0), (0.2, 0.1)]) is None
+
+
+def test_drop_outliers_removes_far_point_only():
+    pts = [(0.7, 0.0), (0.8, 0.0), (0.9, 0.0), (1.0, 0.3), (1.1, 0.0)]
+    px = [(i, i) for i in range(5)]
+    fit, kept, kept_px = front_lane.drop_outliers(
+        front_lane.fit_centre_line(pts), pts, px, 0.05)
+    assert len(kept) == 4 and (1.0, 0.3) not in kept and (3, 3) not in kept_px
+    assert fit[0] == pytest.approx(0.0, abs=1e-9) and fit[1] == pytest.approx(0.0, abs=1e-9)
+    # A far point with leverage pulls the plain fit onto itself; still dropped.
+    lever = [(0.7, 0.0), (0.8, 0.0), (0.9, 0.0), (1.7, -0.4)]
+    fit, kept, _ = front_lane.drop_outliers(front_lane.fit_centre_line(lever), lever, px[:4], 0.05)
+    assert (1.7, -0.4) not in kept and fit[0] == pytest.approx(0.0, abs=1e-9)
+    clean = [(0.7, 0.01), (0.8, 0.0), (0.9, -0.01)]
+    assert front_lane.drop_outliers(front_lane.fit_centre_line(clean), clean, px[:3], 0.05)[1] == clean
 
 
 # ---------------------------------------------------------------- process_front_lane

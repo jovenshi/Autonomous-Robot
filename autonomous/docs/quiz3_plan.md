@@ -202,7 +202,11 @@ these are the edits it needs.
 
 | Stage | Item | Difference and why |
 | --- | --- | --- |
-| 2 | `find_sign_candidates(white_mask, dark_mask, cfg)` | Takes the road mask (dark and unsaturated) for the black-border ring test; no new colour test. A candidate counts when its centre is inside `SIGN_ROI` |
+| 2 | `find_sign_candidates(line_mask, cfg)` | **Changed after the first real recordings (Nov 10).** The real signs are a white card with a thin black outline, about 1.33 wide to tall, not a white panel in a thick black box at 1.65. The white-panel test failed on them: with a lamp in view the card is grey next to the glare, and the octagon touches the outline and splits the white. The candidate is now the outline itself: thin dark lines on the full-resolution frame (`color.mask_dark_lines`, a black-hat, so frame brightness doesn't matter), kept when the line's convex hull is a well-filled rectangle of the outline's aspect, mostly empty inside, and not cut off by the region's edge. The hull tolerates breaks from motion blur. On the 15 `signs_*` recordings plus the 4 straights: no box on any of 828 no-sign frames; a box on 37 to 100% of sign frames (misses are signs cut off by the left edge of the view, or blurred while moving). 1.4 ms per frame |
+| 2 | `sign_boxes(frame, scale, cfg)` | New: region crop, line mask, candidates, padding, in one place for `process_signs` and `collect_signs`. `crop_sign(frame, box)` takes a full-frame box |
+| 2 | White mask | No longer used by sign reading (`mask_white` and its sliders in `tune_colors` remain). `SIGN_BORDER_PX` and `SIGN_BORDER_DARK_FRAC` are replaced by `SIGN_LINE_*`, `SIGN_INK_MAX`, `SIGN_EDGE_PX` |
+| 2 | `collect_signs --random N` | Saves random sign-sized background patches for `none/`: the finder gives no false candidates on the no-sign recordings, so there was nothing else to train NONE on |
+| 2 | `replay --save FOLDER --step N` | Writes the annotated picture per frame as a JPEG, for use without the Pi desktop |
 | 2 | `hog_features(gray, hog)` | Takes the HOG descriptor, not the model, so training can use it before a model exists |
 | 2 | `classify_sign` | Returns `(SignType, margin, scores)`: the scores feed `SignObs.scores` |
 | 2 | `red_check(crop_hsv, cfg)` | As designed |

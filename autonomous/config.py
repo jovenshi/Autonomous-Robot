@@ -161,13 +161,21 @@ SIGN_HZ = 10                    # Hz
 # left corner), so the left part of the view. None = whole view. Refine
 # from the sign recordings.
 SIGN_ROI = (0, 0, 176, 240)
-SIGN_MIN_AREA_PX = 400          # px²
-SIGN_ASPECT_MIN = 1.3           # w / h; the sign panels are about 1.65 wide to tall
-SIGN_ASPECT_MAX = 2.0
-SIGN_FILL_MIN = 0.8             # candidate area / its bounding rectangle's area
-SIGN_BORDER_PX = 3              # px (lane size); width of the ring tested around a candidate
-SIGN_BORDER_DARK_FRAC = 0.5     # fraction of that ring that must be dark (the black box)
-SIGN_BBOX_PAD_FRAC = 0.08       # the reported box grows by this fraction per side to take in the border
+# A sign is a white card with a thin black outline around its symbol. The
+# outline is the candidate: a thin dark line (perception/color.mask_dark_lines)
+# whose convex hull is a rectangle of the outline's shape. Values in
+# FRONT_SIZE (full-frame) pixels, from the signs_* recordings of Nov 10:
+# outline aspect 1.24-1.61 (median 1.33), hull fill 0.86-0.99, ink 0.13-0.33.
+SIGN_LINE_KERNEL_PX = 13        # px; lines thinner than this count as thin
+SIGN_LINE_CONTRAST = 25         # grey levels a line must be darker than its surroundings
+SIGN_LINE_DILATE_PX = 3         # px; lines are thickened by this to bridge breaks (motion blur)
+SIGN_MIN_AREA_PX = 1600         # px²; smallest outline box
+SIGN_ASPECT_MIN = 1.1           # outline long side / short side
+SIGN_ASPECT_MAX = 1.7
+SIGN_FILL_MIN = 0.85            # the outline's hull area / its best-fit rectangle's area
+SIGN_INK_MAX = 0.4              # most of the box that may be line: an outline, not a dark patch
+SIGN_EDGE_PX = 2                # px; an outline this close to the search region's edge is cut off
+SIGN_BBOX_PAD_FRAC = 0.08       # the reported box grows by this fraction per side to take in the card's white margin
 SIGN_RED_MIN_FRAC = 0.15        # fraction of crop; a PAUSE needs this much red
 SIGN_CROP_PX = 64               # px (square); must match the model file
 SIGN_MARGIN_MIN = 0.5           # SVM margin; use the value tools/train_signs.py suggests

@@ -100,7 +100,10 @@ def load_frame(rec_dir, row, cam_id="front"):
     return Frame(image=image, t=float(row["t"]), seq=int(row["seq"]), cam_id=cam_id)
 
 
-def iter_frames(rec_dir, step=1):
-    # Every step-th frame of a recording.
+def iter_frames(rec_dir, step=1, skip_missing=False):
+    # Every step-th frame of a recording. skip_missing: pass over frames
+    # listed in frames.csv whose file is gone (a recording cut short).
     for row in read_index(rec_dir)[::step]:
+        if skip_missing and not os.path.exists(os.path.join(rec_dir, row["file"])):
+            continue
         yield load_frame(rec_dir, row)

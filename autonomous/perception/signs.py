@@ -1,28 +1,35 @@
-"""Sign reading: find a sign panel by colour and shape, read it with HOG + SVM.
+"""Sign reading: find a sign by its black outline, read it with HOG + SVM.
 
-Each Quiz 3 sign is a white panel about 1.65 wide to tall inside a black
-box: an arrow (LEFT, RIGHT, STRAIGHT) or a red octagon (PAUSE). Candidates
-are white blobs inside SIGN_ROI that have the panel's aspect, fill their
-bounding rectangle and have a dark ring around them. The biggest candidate
-is cropped from the full-resolution frame (box grown by SIGN_BBOX_PAD_FRAC
-to take in the black border), normalised (grayscale, square, CLAHE),
-described by HOG and scored by a linear SVM with a NONE class. A PAUSE also
-needs red in the crop.
+Each Quiz 3 sign is a white card with a thin black outline around its
+symbol: an arrow (LEFT, RIGHT, STRAIGHT) or a red octagon (PAUSE). The
+outline is the candidate. Inside SIGN_ROI, thin dark lines are found on the
+full-resolution frame (perception/color.mask_dark_lines), and a line whose
+convex hull is a rectangle of the outline's aspect, well filled, and mostly
+empty inside, is a sign outline. The hull makes a small break in the line
+(motion blur) harmless. The biggest candidate is cropped from the full frame
+(box grown by SIGN_BBOX_PAD_FRAC to take in the card's white margin),
+normalised (grayscale, square, CLAHE), described by HOG and scored by a
+linear SVM with a NONE class. A PAUSE also needs red in the crop.
+
+A white-panel test was tried first (docs/quiz3_plan.md, section 7): it fails
+when a lamp is in view (the card is then grey next to the glare) and when
+the octagon touches the outline.
 
 The SVM is trained on the laptop (tools/train_signs.py), which calls
 crop_sign, normalise_crop and hog_features from here, so the Pi and the
 laptop see identical crops. The Pi needs no scikit-learn: classifying is one
 NumPy product.
 
-Boxes: (x, y, w, h). Candidates and the ROI are in view pixels
-(FRONT_LANE_SIZE); SignObs.bbox is in full-frame pixels, as in DESIGN.md.
+Boxes are (x, y, w, h). SIGN_ROI, SignObs.roi and annotations are in view
+pixels (FRONT_LANE_SIZE); candidates and SignObs.bbox are in full-frame
+pixels, as in DESIGN.md.
 """
 import os
 
 import cv2
 import numpy as np
 
-from perception.color import mask_red
+from perception.color import mask_dark_lines, mask_red
 from robot_types import Annotation, AnnotationKind, SignModel, SignObs, SignType
 
 _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # autonomous/
@@ -39,55 +46,52 @@ def sign_roi(cfg, width, height):
     return (x0, y0, max(0, min(width, x + w) - x0), max(0, min(height, y + h) - y0))
 
 
-def find_sign_candidates(white_mask, dark_mask, cfg):
-    # Boxes of white blobs centred inside SIGN_ROI that pass the size,
-    # aspect, fill and dark-border tests, biggest first. dark_mask: the
-    # frame's road mask (dark and unsaturated), which the black box passes.
-    height, width = white_mask.shape[:2]
-    roi = sign_roi(cfg, width, height)
-    contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+def find_sign_candidates(line_mask, cfg):
+    # Boxes of sign outlines in a thin-dark-line mask, biggest first, in the
+    # mask's pixels. Inner and outer edges of each line are both tried: when
+    # the outline touches something outside it (a hand, the card's shadow),
+    # its inner edge is still a clean rectangle.
+    height, width = line_mask.shape[:2]
+    contours, _ = cv2.findContours(line_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     found = []
     for contour in contours:
         box = cv2.boundingRect(contour)
-        area = cv2.contourArea(contour)
-        if (_centre_inside(box, roi) and _panel_shaped(box, area, cfg)
-                and border_dark_frac(dark_mask, box, cfg.SIGN_BORDER_PX) >= cfg.SIGN_BORDER_DARK_FRAC):
-            found.append((area, box))
+        if (_whole(box, width, height, cfg) and _outline_shaped(contour, box, cfg)
+                and ink_frac(line_mask, box) <= cfg.SIGN_INK_MAX):
+            found.append((box[2] * box[3], box))
     found.sort(key=lambda item: -item[0])
     return [box for _, box in found]
 
 
-def _centre_inside(box, roi):
+def _whole(box, width, height, cfg):
+    # False when the box reaches the edge of the searched region: the sign
+    # is cut off there.
     x, y, w, h = box
-    rx, ry, rw, rh = roi
-    cx, cy = x + w / 2, y + h / 2
-    return rx <= cx < rx + rw and ry <= cy < ry + rh
+    edge = cfg.SIGN_EDGE_PX
+    return x >= edge and y >= edge and x + w <= width - edge and y + h <= height - edge
 
 
-def _panel_shaped(box, area, cfg):
-    # Big enough, about the panel's aspect, and filling its rectangle (the
-    # contour's area includes the arrow or octagon inside it).
+def _outline_shaped(contour, box, cfg):
+    # Big enough, wider than tall, and its convex hull is a rectangle of the
+    # outline's aspect (measured on the best-fit rotated rectangle, so a
+    # tilted sign still passes).
     _, _, w, h = box
-    if area < cfg.SIGN_MIN_AREA_PX or h == 0:
+    if w * h < cfg.SIGN_MIN_AREA_PX or w <= h:
         return False
-    return (cfg.SIGN_ASPECT_MIN <= w / h <= cfg.SIGN_ASPECT_MAX
-            and area / (w * h) >= cfg.SIGN_FILL_MIN)
+    hull = cv2.convexHull(contour)
+    _, (side_a, side_b), _ = cv2.minAreaRect(hull)
+    if min(side_a, side_b) <= 0:
+        return False
+    aspect = max(side_a, side_b) / min(side_a, side_b)
+    fill = cv2.contourArea(hull) / (side_a * side_b)
+    return cfg.SIGN_ASPECT_MIN <= aspect <= cfg.SIGN_ASPECT_MAX and fill >= cfg.SIGN_FILL_MIN
 
 
-def border_dark_frac(dark_mask, box, ring_px):
-    # Fraction of the ring ring_px wide around box that is dark. Only ring
-    # pixels inside the image count; 0 when none are.
-    height, width = dark_mask.shape[:2]
+def ink_frac(line_mask, box):
+    # Fraction of the box that is line. An outline with its symbol is mostly
+    # empty; a dark textured patch is not.
     x, y, w, h = box
-    x0, y0 = max(0, x - ring_px), max(0, y - ring_px)
-    x1, y1 = min(width, x + w + ring_px), min(height, y + h + ring_px)
-    outer = dark_mask[y0:y1, x0:x1]
-    inner = dark_mask[y:y + h, x:x + w]
-    ring_total = outer.size - inner.size
-    if ring_total <= 0:
-        return 0.0
-    ring_dark = cv2.countNonZero(outer) - cv2.countNonZero(inner)
-    return ring_dark / ring_total
+    return cv2.countNonZero(line_mask[y:y + h, x:x + w]) / (w * h)
 
 
 def pick_sign(candidates):
@@ -105,15 +109,27 @@ def pad_box(box, frac, width, height):
 
 
 def scale_box(box, scale):
-    # View-pixel box -> full-frame pixels.
+    # A box in one image's pixels -> another's (view to full frame: x scale;
+    # full frame to view: x 1 / scale).
     return tuple(int(round(v * scale)) for v in box)
+
+
+def sign_boxes(frame, scale, cfg):
+    # Every sign found in SIGN_ROI of this frame, biggest first, as padded
+    # full-frame boxes. scale: full frame / view (FrontMasks.scale).
+    height, width = frame.image.shape[:2]
+    x0, y0, w, h = scale_box(sign_roi(cfg, int(round(width / scale)), int(round(height / scale))),
+                             scale)
+    lines = mask_dark_lines(frame.image[y0:y0 + h, x0:x0 + w], cfg)
+    return [pad_box((x + x0, y + y0, bw, bh), cfg.SIGN_BBOX_PAD_FRAC, width, height)
+            for x, y, bw, bh in find_sign_candidates(lines, cfg)]
 
 
 # ---------------------------------------------------------------- crop and features
 
-def crop_sign(frame, box, scale):
-    # The full-resolution crop under a view-pixel box (already padded).
-    x, y, w, h = scale_box(box, scale)
+def crop_sign(frame, box):
+    # The full-resolution crop under a full-frame box (already padded).
+    x, y, w, h = box
     return frame.image[y:y + h, x:x + w]
 
 
@@ -184,23 +200,23 @@ def red_check(crop_hsv, cfg):
 def process_signs(frame, masks, model, cfg):
     # Candidates -> pick -> crop -> normalise -> HOG -> classify. NONE when
     # there is no candidate, the margin is under SIGN_MARGIN_MIN, or the SVM
-    # says PAUSE without red in the crop. masks must be built with_signs.
-    # model None (no model trained yet): candidates only, always NONE.
-    height, width = masks.white.shape[:2]
+    # says PAUSE without red in the crop. masks: the frame's FrontMasks (for
+    # its view size and scale). model None (no model trained yet):
+    # candidates only, always NONE.
+    height, width = masks.bgr.shape[:2]
     roi = sign_roi(cfg, width, height)
-    box = pick_sign(find_sign_candidates(masks.white, masks.road, cfg))
+    box = pick_sign(sign_boxes(frame, masks.scale, cfg))
     if box is None:
-        return _obs(frame, SignType.NONE, 0.0, None, roi, (), cfg)
-    padded = pad_box(box, cfg.SIGN_BBOX_PAD_FRAC, width, height)
+        return _obs(frame, SignType.NONE, 0.0, None, roi, (), cfg, masks.scale)
     if model is None:
-        return _obs(frame, SignType.NONE, 0.0, padded, roi, (), cfg, masks.scale)
-    crop = crop_sign(frame, padded, masks.scale)
+        return _obs(frame, SignType.NONE, 0.0, box, roi, (), cfg, masks.scale)
+    crop = crop_sign(frame, box)
     sign, margin, scores = classify_sign(hog_features(normalise_crop(crop, cfg), model.hog), model)
     if margin < cfg.SIGN_MARGIN_MIN:
         sign = SignType.NONE
     elif sign == SignType.PAUSE and not red_check(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV), cfg):
         sign = SignType.NONE
-    return _obs(frame, sign, margin, padded, roi, scores, cfg, masks.scale)
+    return _obs(frame, sign, margin, box, roi, scores, cfg, masks.scale)
 
 
 def sign_label(sign, cfg):
@@ -208,17 +224,16 @@ def sign_label(sign, cfg):
     return cfg.SIGN_PHRASES.get(sign.name, "no sign")
 
 
-def _obs(frame, sign, margin, view_box, roi, scores, cfg, scale=1.0):
-    # SignObs with its annotations: the ROI, and the candidate box with its label.
+def _obs(frame, sign, margin, bbox, roi, scores, cfg, scale):
+    # SignObs with its annotations (view px): the ROI, and the sign's box
+    # with its label. bbox: padded full-frame box, or None.
     notes = [_rect(roi, cfg.SIGN_ROI_COLOUR)]
-    bbox = None
-    if view_box is not None:
+    if bbox is not None:
         colour = cfg.SIGN_NONE_COLOUR if sign == SignType.NONE else cfg.SIGN_BOX_COLOUR
+        view_box = scale_box(bbox, 1.0 / scale)
         notes.append(_rect(view_box, colour))
-        x, y, _, _ = view_box
-        notes.append(Annotation(AnnotationKind.TEXT, ((x, max(0, y - 2)),),
+        notes.append(Annotation(AnnotationKind.TEXT, ((view_box[0], max(0, view_box[1] - 2)),),
                                 sign_label(sign, cfg), colour))
-        bbox = scale_box(view_box, scale)
     return SignObs(sign=sign, score=margin, bbox=bbox, t=frame.t, seq=frame.seq,
                    roi=roi, scores=scores, annotations=tuple(notes))
 

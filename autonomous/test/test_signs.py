@@ -1,9 +1,9 @@
 """Tests for perception/signs.py, tools/collect_signs.py, tools/train_signs.py,
 the sign part of tools/replay.py and ui/overlay.draw_annotations.
 
-No robot needed: signs are drawn synthetically (a white panel about 1.65
-wide to tall in a black box, with a black arrow or a red octagon), and the
-no-sign frames in test/data/no_sign are real course frames. The test model
+No robot needed: signs are drawn synthetically, like the real ones (a white
+card with a thin black outline around a black arrow or a red octagon), and
+the no-sign frames in test/data/no_sign are real course frames. The test model
 is a nearest-template linear model (weights = each class's HOG template,
 bias = -|template|^2 / 2), written and read through the real model file.
 """
@@ -27,7 +27,8 @@ from tools.recording import RecordingWriter  # noqa: E402
 NO_SIGN_REC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "no_sign")
 GRASS = (40, 170, 40)                     # BGR
 RED = (0, 0, 220)
-PANEL = (132, 80, 8)                      # full-frame px: width, height, black border
+CARD = (136, 104)                         # full-frame px: the white card
+INSET, LINE = 8, 3                        # px: card edge to the outline, outline thickness
 SIGN_KINDS = ("PAUSE", "LEFT", "RIGHT", "STRAIGHT")
 
 
@@ -47,16 +48,31 @@ def draw_symbol(img, kind, cx, cy, colour_override=None):
     cv2.rectangle(img, (cx + shaft[0], cy + shaft[1]), (cx + shaft[2], cy + shaft[3]), (0, 0, 0), -1)
 
 
-def sign_frame(kind=None, x=120, y=200, seq=1, bordered=True, octagon_colour=None):
-    # A 640 x 480 frame of grass with one sign panel at (x, y), full-frame px.
+def sign_frame(kind=None, x=120, y=200, seq=1, outlined=True, octagon_colour=None, gap=0):
+    # A 640 x 480 frame of grass with one sign card at (x, y), full-frame px.
+    # gap: px missing from the middle of the outline's top line (motion blur).
     img = np.full((480, 640, 3), GRASS, np.uint8)
     if kind is not None:
-        w, h, b = PANEL
-        if bordered:
-            cv2.rectangle(img, (x, y), (x + w - 1, y + h - 1), (0, 0, 0), -1)
-        cv2.rectangle(img, (x + b, y + b), (x + w - 1 - b, y + h - 1 - b), (255, 255, 255), -1)
+        w, h = CARD
+        cv2.rectangle(img, (x, y), (x + w - 1, y + h - 1), (255, 255, 255), -1)
+        if outlined:
+            cv2.rectangle(img, (x + INSET, y + INSET), (x + w - 1 - INSET, y + h - 1 - INSET),
+                          (0, 0, 0), LINE)
+        if gap:
+            cv2.rectangle(img, (x + w // 2 - gap // 2, y + INSET - LINE),
+                          (x + w // 2 + gap // 2, y + INSET + LINE), (255, 255, 255), -1)
         draw_symbol(img, kind, x + w // 2, y + h // 2, octagon_colour)
     return Frame(img, 1.0 + seq / 30, seq, "front")
+
+
+def outline_mask(*rects, size=(480, 640)):
+    # A line mask with rectangle outlines whose outer edge is (x, y, w, h),
+    # 3 px thick.
+    mask = np.zeros(size, np.uint8)
+    for x, y, w, h in rects:
+        mask[y:y + h, x:x + w] = 255
+        mask[y + 3:y + h - 3, x + 3:x + w - 3] = 0
+    return mask
 
 
 def masks_of(frame):
@@ -65,10 +81,7 @@ def masks_of(frame):
 
 def raw_crop(frame):
     # The padded full-resolution crop, as collect_signs saves it.
-    m = masks_of(frame)
-    box = signs.pick_sign(signs.find_sign_candidates(m.white, m.road, config))
-    padded = signs.pad_box(box, config.SIGN_BBOX_PAD_FRAC, *m.white.shape[1::-1])
-    return signs.crop_sign(frame, padded, m.scale)
+    return signs.crop_sign(frame, signs.pick_sign(signs.sign_boxes(frame, 2.0, config)))
 
 
 def normalised(frame):
@@ -96,58 +109,86 @@ def model(model_path):
 
 # ---------------------------------------------------------------- candidates
 
-def test_candidate_box_closely_encloses_the_panel():
-    m = masks_of(sign_frame("LEFT", x=120, y=200))
-    boxes = signs.find_sign_candidates(m.white, m.road, config)
-    assert len(boxes) == 1
-    x, y, w, h = boxes[0]                         # the white inside the border, view px
-    assert (x, y) == pytest.approx((64, 104), abs=1) and (w, h) == pytest.approx((58, 32), abs=1)
-    padded = signs.pad_box(boxes[0], config.SIGN_BBOX_PAD_FRAC, 320, 240)
-    px, py, pw, ph = signs.scale_box(padded, m.scale)
-    assert abs(px - 120) <= 4 and abs(py - 200) <= 4          # takes in the black border
-    assert abs(pw - PANEL[0]) <= 8 and abs(ph - PANEL[1]) <= 8
+def near_card(box, x, y):
+    bx, by, bw, bh = box
+    return (abs(bx - x) <= 6 and abs(by - y) <= 6
+            and abs(bw - CARD[0]) <= 10 and abs(bh - CARD[1]) <= 10)
+
+
+def test_box_closely_encloses_the_card():
+    boxes = signs.sign_boxes(sign_frame("LEFT", x=120, y=200), 2.0, config)
+    assert len(boxes) >= 1 and near_card(boxes[0], 120, 200)
 
 
 @pytest.mark.parametrize("frame", [
-    sign_frame("LEFT", bordered=False),           # no dark ring
-    sign_frame("LEFT", x=480),                    # centre outside SIGN_ROI
+    sign_frame("LEFT", outlined=False),           # a white card with no outline
+    sign_frame("LEFT", x=480),                    # outside SIGN_ROI
+    sign_frame("LEFT", x=-10),                    # cut off by the frame edge
     sign_frame(None),                             # nothing there
 ])
-def test_candidates_rejected(frame):
-    m = masks_of(frame)
-    assert signs.find_sign_candidates(m.white, m.road, config) == []
+def test_no_candidates(frame):
+    assert signs.sign_boxes(frame, 2.0, config) == []
 
 
-def test_square_and_ragged_white_rejected():
-    white = np.zeros((240, 320), np.uint8)
-    dark = np.full((240, 320), 255, np.uint8)     # every ring dark: only shape decides
-    white[20:60, 20:60] = 255                     # square: aspect 1
-    white[100:140, 20:86] = 255                   # panel shape, but cut away to an L:
-    white[100:125, 40:86] = 0                     #   fill well under SIGN_FILL_MIN
-    white[160:200, 100:166] = 255                 # a real panel: 66 x 40
-    assert signs.find_sign_candidates(white, dark, config) == [(100, 160, 66, 40)]
+def test_outline_with_a_gap_is_still_found():
+    boxes = signs.sign_boxes(sign_frame("STRAIGHT", gap=14), 2.0, config)
+    assert boxes and near_card(boxes[0], 120, 200)
+
+
+def test_tilted_sign_is_found():
+    frame = sign_frame("RIGHT")
+    turn = cv2.getRotationMatrix2D((188, 252), 8, 1.0)
+    tilted = cv2.warpAffine(frame.image, turn, (640, 480), borderValue=GRASS)
+    assert signs.sign_boxes(Frame(tilted, 1.0, 1, "front"), 2.0, config)
+
+
+def test_shapes_that_are_not_a_sign_outline():
+    good = (300, 300, 120, 90)
+    mask = outline_mask((20, 20, 90, 90),          # square
+                        (20, 150, 200, 60),        # too long
+                        (400, 20, 30, 22),         # too small
+                        good)
+    cv2.line(mask, (20, 300), (140, 300), 255, 3)  # an L: its hull is a triangle
+    cv2.line(mask, (20, 300), (20, 390), 255, 3)
+    mask[400:470, 500:600] = 255                   # a solid dark patch: all ink
+    # The outline's outer edge, then its inner edge; nothing else.
+    assert signs.find_sign_candidates(mask, config) == [good, (302, 302, 116, 86)]
+
+
+def test_outline_running_off_the_region_edge_is_cut_off():
+    whole = outline_mask((30, 100, 120, 90))
+    assert signs.find_sign_candidates(whole, config)[0] == (30, 100, 120, 90)
+    cut = whole[:, 60:]                            # the left part is out of view
+    assert signs.find_sign_candidates(np.ascontiguousarray(cut), config) == []
 
 
 def test_biggest_candidate_first_and_picked():
-    white = np.zeros((240, 320), np.uint8)
-    dark = np.full((240, 320), 255, np.uint8)
-    white[10:40, 10:60] = 255
-    white[100:140, 10:76] = 255
-    boxes = signs.find_sign_candidates(white, dark, config)
-    assert signs.pick_sign(boxes) == (10, 100, 66, 40) and len(boxes) == 2
-    assert signs.pick_sign([]) is None
+    small, big = (20, 20, 80, 60), (200, 200, 160, 120)
+    boxes = signs.find_sign_candidates(outline_mask(small, big), config)
+    assert boxes[0] == big and small in boxes and boxes.index(small) > boxes.index(big)
+    assert signs.pick_sign(boxes) == big and signs.pick_sign([]) is None
 
 
-def test_border_dark_frac_and_pad_box_clip():
-    dark = np.zeros((20, 20), np.uint8)
-    dark[:, :10] = 255
-    assert signs.border_dark_frac(dark, (8, 8, 4, 4), 2) == pytest.approx(0.5)
+def test_ink_frac_and_pad_box_clip():
+    mask = np.zeros((20, 20), np.uint8)
+    mask[:, :10] = 255
+    assert signs.ink_frac(mask, (5, 0, 10, 10)) == pytest.approx(0.5)
     assert signs.pad_box((0, 0, 10, 10), 0.5, 12, 12) == (0, 0, 12, 12)
+
+
+def test_dark_lines_ignore_frame_brightness():
+    # The same sign in a dim frame, and beside a glaring lamp, is still found.
+    dim = (sign_frame("LEFT").image * 0.55).astype(np.uint8)
+    assert signs.sign_boxes(Frame(dim, 1.0, 1, "front"), 2.0, config)
+    lamp = dim.copy()
+    cv2.circle(lamp, (560, 100), 60, (255, 255, 255), -1)
+    assert signs.sign_boxes(Frame(lamp, 1.0, 1, "front"), 2.0, config)
 
 
 def test_sign_roi_none_is_whole_view(monkeypatch):
     monkeypatch.setattr(config, "SIGN_ROI", None)
     assert signs.sign_roi(config, 320, 240) == (0, 0, 320, 240)
+    assert signs.sign_boxes(sign_frame("LEFT", x=480), 2.0, config)
     monkeypatch.setattr(config, "SIGN_ROI", (300, 0, 100, 240))
     assert signs.sign_roi(config, 320, 240) == (300, 0, 20, 240)
 
@@ -196,9 +237,7 @@ def test_reads_every_sign_anywhere_in_the_roi(model, kind, x, y):
     obs = signs.process_signs(frame, masks_of(frame), model, config)
     assert obs.sign == SignType[kind]
     assert obs.score >= config.SIGN_MARGIN_MIN
-    bx, by, bw, bh = obs.bbox
-    assert abs(bx - x) <= 4 and abs(by - y) <= 4
-    assert abs(bw - PANEL[0]) <= 8 and abs(bh - PANEL[1]) <= 8
+    assert near_card(obs.bbox, x, y)
     assert (obs.t, obs.seq) == (frame.t, frame.seq)
     assert {name for name, _ in obs.scores} == set(train_signs.CLASSES)
 
@@ -279,11 +318,22 @@ def test_collect_signs_saves_one_crop_per_sign_frame(tmp_path):
     assert collect_signs.collect(str(rec), str(out), config) == (3, 2)
     assert sorted(os.listdir(out)) == ["signs_left_1_000001.png", "signs_left_1_000003.png"]
     crop = cv2.imread(str(out / "signs_left_1_000001.png"))
-    assert abs(crop.shape[1] - PANEL[0]) <= 8 and abs(crop.shape[0] - PANEL[1]) <= 8
+    assert abs(crop.shape[1] - CARD[0]) <= 10 and abs(crop.shape[0] - CARD[1]) <= 10
 
 
 def test_collect_signs_no_sign_recording(tmp_path):
     assert collect_signs.collect(NO_SIGN_REC, str(tmp_path), config, every_candidate=True) == (4, 0)
+
+
+def test_collect_random_background_patches(tmp_path):
+    out = tmp_path / "none"
+    assert collect_signs.collect(NO_SIGN_REC, str(out), config, random_count=3) == (4, 12)
+    names = sorted(os.listdir(out))
+    assert names[0].endswith("_000001_r0.png") and train_signs.recording_of(names[0]) == "no_sign"
+    rx, ry, rw, rh = signs.scale_box(signs.sign_roi(config, 320, 240), 2.0)
+    for name in names:
+        h, w = cv2.imread(str(out / name)).shape[:2]
+        assert w * h >= 0.9 * config.SIGN_MIN_AREA_PX and w <= rw / 2 and w > h
 
 
 # ---------------------------------------------------------------- train_signs (no scikit-learn)

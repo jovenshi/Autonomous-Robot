@@ -14,6 +14,11 @@ Run from the robot/ folder:
     python -m tools.replay recordings/front_20261011_140000
     python -m tools.replay recordings/front_20261011_140000 --speed 0 --no-window
     python -m tools.replay recordings/signs_left_1 --model models/sign_svm.npz
+    python -m tools.replay recordings/signs_left_1 --save replay_out/signs_left_1 --step 15
+
+With no desktop (SSH, VS Code remote), --save writes the same picture for
+every --step-th frame as a JPEG in that folder: open the folder in the
+editor to look.
 
 Keys: space pause/resume, n next frame while paused, q or Esc quit.
 """
@@ -58,8 +63,8 @@ def replay_step(frame, lane_ctrl, cfg, tracker=None):
 def sign_step(frame, model, cfg):
     # One frame through the robot's sign reader -> (SignObs, normalised crop
     # or None). The crop is cut again from the reported box for display.
-    obs = process_signs(frame, make_front_masks(frame, cfg, with_signs=True), model, cfg)
-    crop = None if obs.bbox is None else normalise_crop(crop_sign(frame, obs.bbox, 1.0), cfg)
+    obs = process_signs(frame, make_front_masks(frame, cfg), model, cfg)
+    crop = None if obs.bbox is None else normalise_crop(crop_sign(frame, obs.bbox), cfg)
     return obs, crop
 
 
@@ -89,7 +94,9 @@ def sign_panel(sign, crop, size, cfg):
     return put_lines(panel, lines)
 
 
-def show(result, drive, motor, cfg, sign=None, crop=None):
+def compose(result, drive, motor, cfg, sign=None, crop=None):
+    # The picture for one frame: lane drawing with the sign annotations, and
+    # the sign panel beside it. Twice the view size.
     img = draw_lane(result.view, result.lane, cfg.FRONT_BANDS)
     if sign is not None:
         draw_annotations(img, sign.annotations)
@@ -98,7 +105,13 @@ def show(result, drive, motor, cfg, sign=None, crop=None):
     img = put_lines(img, lines)
     if sign is not None:
         img = np.hstack([img, sign_panel(sign, crop, img.shape[0], cfg)])
-    cv2.imshow(WINDOW, cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST))
+    return cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
+
+
+def save_picture(save_dir, frame, picture):
+    # <save_dir>/frame_<seq>.jpg
+    os.makedirs(save_dir, exist_ok=True)
+    cv2.imwrite(os.path.join(save_dir, f"frame_{frame.seq:06d}.jpg"), picture)
 
 
 def handle_keys(paused, frame_wait_ms):
@@ -115,20 +128,24 @@ def handle_keys(paused, frame_wait_ms):
             return False, paused
 
 
-def run(rec_dir, speed, window, cfg, model=None):
-    # model: a SignModel, or None to show sign candidates only.
+def run(rec_dir, speed, window, cfg, model=None, save_dir=None, step=1):
+    # model: a SignModel, or None to show sign candidates only. save_dir:
+    # folder for one picture per frame shown (no desktop needed). step: use
+    # every step-th frame.
     if cfg.FRONT_BANDS is None:
         raise SystemExit("FRONT_BANDS is not set in config.py: run python -m tools.calib_ui first")
     lane_ctrl, tracker = LaneController(cfg), LaneTracker()
     prev_t, paused = None, False
-    for frame in iter_frames(rec_dir):
+    for frame in iter_frames(rec_dir, step, skip_missing=True):
         result, _, drive, motor = replay_step(frame, lane_ctrl, cfg, tracker)
         sign, crop = sign_step(frame, model, cfg)
         print(format_line(frame, result, drive, motor, sign, cfg))
         gap_s = 0.0 if prev_t is None or speed <= 0 else (frame.t - prev_t) / speed
         prev_t = frame.t
+        if save_dir is not None:
+            save_picture(save_dir, frame, compose(result, drive, motor, cfg, sign, crop))
         if window:
-            show(result, drive, motor, cfg, sign, crop)
+            cv2.imshow(WINDOW, compose(result, drive, motor, cfg, sign, crop))
             quit_now, paused = handle_keys(paused, int(gap_s * 1000))
             if quit_now:
                 break
@@ -145,8 +162,13 @@ def main():
                    help="playback speed (1 = real time, 0 = as fast as possible)")
     p.add_argument("--no-window", action="store_true", help="print only")
     p.add_argument("--model", default=config.SIGN_MODEL_PATH, help="sign model (.npz)")
+    p.add_argument("--save", default=None, metavar="FOLDER",
+                   help="write a picture per frame here instead of opening a window")
+    p.add_argument("--step", type=int, default=1, help="use every n-th frame")
     args = p.parse_args()
-    run(args.recording, args.speed, not args.no_window, config, open_model(args.model, config))
+    window = not args.no_window and args.save is None
+    run(args.recording, 0.0 if args.save else args.speed, window, config,
+        open_model(args.model, config), args.save, args.step)
 
 
 def open_model(path, cfg):

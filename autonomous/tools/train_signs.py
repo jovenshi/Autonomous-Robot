@@ -30,7 +30,7 @@ from robot_types import SignModel, SignType
 
 _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # autonomous/
 CLASSES = tuple(t.name for t in SignType)                # folder = class name in lower case
-_FILE = re.compile(r"^(?P<rec>.+)_\d{6}(_c\d+)?\.png$")
+_FILE = re.compile(r"^(?P<rec>.+)_\d{6}(_[cr]\d+)?\.png$")
 
 
 # ---------------------------------------------------------------- data

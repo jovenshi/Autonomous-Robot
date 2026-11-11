@@ -9,3 +9,4 @@ autonomous/recordings/
 autonomous/calibration/
 autonomous/config.py.bak
 autonomous/signs_data/
+autonomous/replay_out/

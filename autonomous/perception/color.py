@@ -54,6 +54,21 @@ def mask_red(hsv, cfg):
     return cv2.bitwise_or(low, high)
 
 
+def mask_dark_lines(img, cfg):
+    # Thin dark lines on a lighter ground, such as a sign's black outline.
+    # Black-hat: how much darker each pixel is than its surroundings within
+    # SIGN_LINE_KERNEL_PX, so it does not depend on how bright the frame is
+    # (a lamp in view, a card that looks grey). Lines are thickened by
+    # SIGN_LINE_DILATE_PX to bridge small breaks. img: BGR.
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    size = cfg.SIGN_LINE_KERNEL_PX
+    hat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT,
+                           cv2.getStructuringElement(cv2.MORPH_RECT, (size, size)))
+    lines = cv2.inRange(hat, cfg.SIGN_LINE_CONTRAST, 255)
+    grow = cfg.SIGN_LINE_DILATE_PX
+    return cv2.dilate(lines, np.ones((grow, grow), np.uint8))
+
+
 def roi_brightness(hsv, roi):
     # Mean V in the region, for exposure management and health checks.
     x, y, w, h = roi

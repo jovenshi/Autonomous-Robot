@@ -121,7 +121,7 @@ def test_render_grid_uses_real_masks(monkeypatch):
     monkeypatch.setattr(config, "FRONT_BANDS", BANDS)
     frame = Frame(cv2.resize(scene(), (640, 480), interpolation=cv2.INTER_NEAREST), 0.0, 1, "front")
     grid, masks = tune_colors.render(frame, tune_colors.config_with({}))
-    assert grid.shape == (2 * H, 2 * W, 3)
+    assert grid.shape == (2 * H, 3 * W, 3)
     assert masks.yellow[120, int(CX)] == 255
     narrow = tune_colors.config_with({"YELLOW_H_MIN": 100, "YELLOW_H_MAX": 120})
     _, masks = tune_colors.render(frame, narrow)
@@ -132,7 +132,7 @@ def test_render_without_bands(monkeypatch):
     monkeypatch.setattr(config, "FRONT_BANDS", None)
     frame = Frame(scene(), 0.0, 1, "front")
     grid, _ = tune_colors.render(frame, tune_colors.config_with({}))
-    assert grid.shape == (2 * H, 2 * W, 3)
+    assert grid.shape == (2 * H, 3 * W, 3)
 
 
 # ---------------------------------------------------------------- replay

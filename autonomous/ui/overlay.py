@@ -4,6 +4,7 @@ debug views.
 
 TODO: tools/debug_draw.py is to be replaced by this module in a follow-up
 task (tools/replay.py and tools/tune_colors.py switch to draw_front_overlay).
+replay already draws sign annotations with draw_annotations.
 
 Geometry comes in processed-image pixels (the 320 x 240 view each camera
 result carries, from the same frame the observations were measured on).
@@ -18,6 +19,7 @@ import math
 import cv2
 import numpy as np
 
+from robot_types import AnnotationKind
 from ui.text import draw_text
 
 # Theme (BGR): dark background, one accent per meaning.
@@ -77,6 +79,22 @@ def draw_side_overlay(img, side, cfg, scale=1.0):
         x = int(round(obs.boundary_x_px * scale))
         cv2.line(img, (x, 0), (x, height - 1), BLUE, max(2, int(2 * scale)))
     _draw_strip(img, f"offset {cm(obs.offset_m)}    conf {obs.conf:.2f}", scale)
+
+
+def draw_annotations(img, annotations, scale=1.0):
+    # Draws perception's Annotations (view px) without knowing what they
+    # mean: rectangles, lines, points and text, each in its own colour.
+    thick = max(1, int(2 * scale))
+    for note in annotations:
+        pts = [_px(x, y, scale) for x, y in note.pts]
+        if note.kind == AnnotationKind.RECT:
+            cv2.rectangle(img, pts[0], pts[1], note.colour, thick, cv2.LINE_AA)
+        elif note.kind == AnnotationKind.LINE:
+            cv2.line(img, pts[0], pts[1], note.colour, thick, cv2.LINE_AA)
+        elif note.kind == AnnotationKind.POINT:
+            cv2.circle(img, pts[0], max(3, int(4 * scale)), note.colour, -1, cv2.LINE_AA)
+        elif note.kind == AnnotationKind.TEXT:
+            draw_text(img, note.text, pts[0], int(STRIP_TEXT * scale), note.colour, bold=True)
 
 
 def mark_stale(img, age_s):

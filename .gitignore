@@ -8,3 +8,4 @@ autonomous/logs/
 autonomous/recordings/
 autonomous/calibration/
 autonomous/config.py.bak
+autonomous/signs_data/

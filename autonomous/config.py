@@ -156,7 +156,11 @@ CROSS_LINE_MIN_FRAC = 0.5       # fraction of width
 STOP_LINE_Y_FRAC = 0.85         # fraction of height
 SIDE_GREEN_MIN_FRAC = 0.2       # fraction
 SIGN_HZ = 10                    # Hz
-SIGN_ROI = None                 # MEASURED from sign recordings: (x, y, w, h) searched, FRONT_LANE_SIZE px; None = whole view
+# (x, y, w, h) in FRONT_LANE_SIZE px; a candidate's centre must lie inside.
+# The signs are front left of the robot (sign quiz, and the junction's far
+# left corner), so the left part of the view. None = whole view. Refine
+# from the sign recordings.
+SIGN_ROI = (0, 0, 176, 240)
 SIGN_MIN_AREA_PX = 400          # px²
 SIGN_ASPECT_MIN = 1.3           # w / h; the sign panels are about 1.65 wide to tall
 SIGN_ASPECT_MAX = 2.0
@@ -169,6 +173,21 @@ SIGN_CROP_PX = 64               # px (square); must match the model file
 SIGN_MARGIN_MIN = 0.5           # SVM margin; use the value tools/train_signs.py suggests
 SIGN_CLAHE_CLIP = 2.0           # clip limit
 SIGN_CLAHE_TILES = (4, 4)       # tile grid
+SIGN_HOG_BLOCK_PX = 16          # HOG block, stride, cell (px) and orientation bins; 1,764 values at 64 px.
+SIGN_HOG_STRIDE_PX = 8          # Written into the model file by train_signs.py; the Pi reads
+SIGN_HOG_CELL_PX = 8            # them back from the file, not from here.
+SIGN_HOG_BINS = 9
+SIGN_SVM_C = 1.0                # LinearSVC regularisation (tools/train_signs.py, laptop only)
+SIGN_AUG_COPIES = 10            # augmented copies per training crop (never flipped: a flipped LEFT is a RIGHT)
+SIGN_AUG_BRIGHT = 40            # +/- grey levels added
+SIGN_AUG_CONTRAST = 0.25        # +/- fraction of contrast change
+SIGN_AUG_ROT_DEG = 8            # +/- degrees
+SIGN_AUG_SCALE = 0.10           # +/- fraction
+SIGN_AUG_SHIFT_FRAC = 0.05      # +/- fraction of the crop size
+SIGN_AUG_BLUR_MAX_PX = 3        # Gaussian blur kernel up to this (odd px; 1 = none)
+SIGN_ROI_COLOUR = (255, 166, 88)   # BGR annotation colours: search region,
+SIGN_BOX_COLOUR = (80, 185, 63)    # a read sign,
+SIGN_NONE_COLOUR = (34, 153, 210)  # a candidate read as no sign
 SIGN_MODEL_PATH = "models/sign_svm.npz"   # relative to autonomous/; written by tools/train_signs.py
 SIGNS_DATA_DIR = "signs_data"   # relative to autonomous/; crops from tools/collect_signs.py
 SIGN_VOTES_NEEDED = 3           # frames
@@ -185,7 +204,7 @@ STOP_HOLD_S = 3.0               # s
 # TURN, EXITING, CONTINUE. CONFIRM with a tape on the mat: read off the course
 # zone diagram, scaled by ROAD_WIDTH_M; PAUSE starts where the road widens.
 ZONE_BOUNDS_M = (-0.73, -0.28, -0.17, -0.04, 0.04, 0.18)
-ZONE_REF_X_M = None             # CONFIRM: m ahead of the rear axle of the point the judges watch
+ZONE_REF_X_M = 0.0              # m ahead of the rear axle of the point whose position decides the zone; 0 = the rear axle (the pivot)
 FLARE_TO_CENTRE_M = 0.28        # m; MEASURED roughly: where the road starts to widen, to the junction centre
 ZONE_PAUSE_S = 2.0              # s stopped at each zone change, for the judge
 QUIZ_EXIT_M = 0.4               # m past the centre at which QUIZ_INTERSECTION goes back to IDLE

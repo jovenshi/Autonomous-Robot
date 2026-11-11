@@ -1,6 +1,6 @@
 # Quiz 3 plan: sign reading, location zones, modes, audio
 
-**Status:** stage 1 done (types and config), 2026-11-10, branch `quiz3`. Section 1 is the approved brief, kept word for word. Sections 2 to
+**Status:** stage 2 done (sign reading on saved images), 2026-11-10, branch `quiz3`. Section 1 is the approved brief, kept word for word. Sections 2 to
 4 are the inventory taken from the code before any change. Stage 9 rewrites
 this file to match what was built.
 
@@ -197,3 +197,18 @@ these are the edits it needs.
 | Runtime table; `ui` process | Display process draws and reads taps | Operator process: display, PS5 controller and audio. A vision worker process does location and sign image work |
 | Data types | `IntersectionObs`, `FrontResult.inter`, `SignType.STOP`, `Action.STOP` | `LocationEvidence`, `FrontResult.location`, `PAUSE`; plus the types in section 1 |
 | Config: Junctions and signs | `SIGN_SIDE`, `OCTAGON_CORNERS`, `ARROW_ASYM_MIN` | removed; new names in section 3 |
+
+## 7. Built so far: where it differs from DESIGN.md
+
+| Stage | Item | Difference and why |
+| --- | --- | --- |
+| 2 | `find_sign_candidates(white_mask, dark_mask, cfg)` | Takes the road mask (dark and unsaturated) for the black-border ring test; no new colour test. A candidate counts when its centre is inside `SIGN_ROI` |
+| 2 | `hog_features(gray, hog)` | Takes the HOG descriptor, not the model, so training can use it before a model exists |
+| 2 | `classify_sign` | Returns `(SignType, margin, scores)`: the scores feed `SignObs.scores` |
+| 2 | `red_check(crop_hsv, cfg)` | As designed |
+| 2 | `process_signs(..., model=None)` | With no model yet, shows candidates only and reports NONE, so replay and the display work before training |
+| 2 | `collect_signs` | Saves the padded colour crop, not the normalised one: `train_signs` augments it and then calls the robot's own `normalise_crop`. `--all` saves every candidate |
+| 2 | `train_signs` | Holds out recordings by name (`--holdout`), taken from the crop file names |
+| 2 | Test data | `test/data/no_sign/`: 4 real course frames (the ones with the most white clutter), since `recordings/` is git-ignored |
+| 2 | `ZONE_REF_X_M = 0.0` | The rear axle decides the zone (the robot spans two zones at once, so one point must) |
+

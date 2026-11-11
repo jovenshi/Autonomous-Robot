@@ -1,10 +1,12 @@
-"""Tune the yellow and road colour thresholds on recorded frames.
+"""Tune the yellow, road, white and red colour thresholds on recorded frames.
 
 Run from the autonomous/ folder on the Pi desktop:
     python -m tools.tune_colors recordings/front_20261011_140000
 
-Two windows: "colors" shows four panels (frame | yellow mask | road mask |
-lane result) and "controls" holds the sliders. The masks are made by the real
+Two windows: "colors" shows six panels (frame | yellow | white on top, road
+| lane result | red below) and "controls" holds the sliders. White and red
+feed sign reading: the sign panel must be white and its black box must not,
+and the PAUSE octagon must be red. The masks are made by the real
 perception/color.py code with the slider values, so what you see is what the
 robot will see. The lane panel needs FRONT_BANDS (tools/calibrate.py).
 
@@ -34,11 +36,14 @@ from tools.recording import load_frame, read_index
 WINDOW = "colors"
 CONTROLS = "controls"
 
-# (config name, slider maximum)
+# (config name, slider maximum, slider steps per unit): the config value is
+# slider position / steps, so WHITE_V_REL (a ratio) moves in steps of 0.01.
 SLIDERS = (
-    ("YELLOW_H_MIN", 179), ("YELLOW_H_MAX", 179),
-    ("YELLOW_S_MIN", 255), ("YELLOW_V_MIN", 255),
-    ("ROAD_S_MAX", 255), ("ROAD_V_T_MIN", 255), ("ROAD_V_T_MAX", 255),
+    ("YELLOW_H_MIN", 179, 1), ("YELLOW_H_MAX", 179, 1),
+    ("YELLOW_S_MIN", 255, 1), ("YELLOW_V_MIN", 255, 1),
+    ("ROAD_S_MAX", 255, 1), ("ROAD_V_T_MIN", 255, 1), ("ROAD_V_T_MAX", 255, 1),
+    ("WHITE_S_MAX", 255, 1), ("WHITE_V_REL", 100, 100), ("WHITE_V_PCT", 100, 1),
+    ("RED_H_LOW_MAX", 179, 1), ("RED_H_HIGH_MIN", 179, 1), ("RED_S_MIN", 255, 1),
 )
 
 
@@ -52,12 +57,19 @@ def config_with(overrides):
 def make_controls(frame_count):
     cv2.namedWindow(CONTROLS, cv2.WINDOW_NORMAL)
     cv2.createTrackbar("frame", CONTROLS, 0, max(frame_count - 1, 1), lambda v: None)
-    for name, maximum in SLIDERS:
-        cv2.createTrackbar(name, CONTROLS, int(getattr(config, name)), maximum, lambda v: None)
+    for name, maximum, steps in SLIDERS:
+        cv2.createTrackbar(name, CONTROLS, int(round(getattr(config, name) * steps)), maximum,
+                           lambda v: None)
 
 
 def read_sliders():
-    return {name: cv2.getTrackbarPos(name, CONTROLS) for name, _ in SLIDERS}
+    return {name: slider_value(cv2.getTrackbarPos(name, CONTROLS), steps)
+            for name, _, steps in SLIDERS}
+
+
+def slider_value(position, steps):
+    # Slider position -> config value: an int, or a ratio when steps > 1.
+    return position if steps == 1 else position / steps
 
 
 def tint(view, mask, colour):
@@ -68,27 +80,30 @@ def tint(view, mask, colour):
 
 
 def render(frame, cfg):
-    # The 2x2 grid for one frame with the given thresholds.
-    masks = make_front_masks(frame, cfg)
+    # The 2x3 grid for one frame with the given thresholds.
+    masks = make_front_masks(frame, cfg, with_signs=True)
     yellow = put_lines(tint(masks.bgr, masks.yellow, (255, 0, 255)), ["yellow"])
     road = put_lines(tint(masks.bgr, masks.road, (255, 0, 0)), ["road"])
+    white = put_lines(tint(masks.bgr, masks.white, (0, 255, 255)), ["white (sign panel)"])
+    red = put_lines(tint(masks.bgr, masks.red, (255, 255, 0)), ["red (PAUSE)"])
     if cfg.FRONT_BANDS is None:
         lane_panel = put_lines(masks.bgr.copy(), ["lane: run tools/calibrate.py first"])
     else:
         lane = process_front_lane(masks, cfg, frame.t, frame.seq)
         lane_panel = put_lines(draw_lane(masks.bgr, lane, cfg.FRONT_BANDS), lane_text(lane))
     frame_panel = put_lines(masks.bgr.copy(), [f"frame {frame.seq}"])
-    return np.vstack([np.hstack([frame_panel, yellow]), np.hstack([road, lane_panel])]), masks
+    grid = np.vstack([np.hstack([frame_panel, yellow, white]), np.hstack([road, lane_panel, red])])
+    return grid, masks
 
 
 def print_values(values):
     print("\n# Paste into config.py (colour tests)")
-    for name, _ in SLIDERS:
+    for name, _, _ in SLIDERS:
         print(f"{name} = {values[name]}")
 
 
 def on_click(event, x, y, flags, state):
-    # Prints HSV of the clicked pixel (any of the four panels).
+    # Prints HSV of the clicked pixel (any of the six panels).
     if event != cv2.EVENT_LBUTTONDOWN or state.get("hsv") is None:
         return
     hsv = state["hsv"]
@@ -135,7 +150,7 @@ def run(rec_dir):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Tune yellow and road thresholds on a recording.")
+    p = argparse.ArgumentParser(description="Tune the colour thresholds on a recording.")
     p.add_argument("recording", help="folder made by tools/record.py")
     run(p.parse_args().recording)
 

@@ -104,7 +104,7 @@ def fit_svm(x, y, cfg):
     # LinearSVC, one-vs-rest -> (weights, biases, classes). scikit-learn is
     # imported here only, so everything else runs on the Pi.
     from sklearn.svm import LinearSVC
-    clf = LinearSVC(C=cfg.SIGN_SVM_C, max_iter=20000).fit(x, y)
+    clf = LinearSVC(C=cfg.SIGN_SVM_C, dual=True, max_iter=20000).fit(x, y)
     weights, biases = clf.coef_.astype(np.float32), clf.intercept_.astype(np.float32)
     if len(clf.classes_) == 2:              # binary: one row for classes_[1]
         weights, biases = np.vstack([-weights, weights]), np.concatenate([-biases, biases])

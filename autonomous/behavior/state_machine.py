@@ -10,7 +10,11 @@ inputs exist (location.py, signs.py, sign_voter.py, the IMU reader).
 choose_action is complete, ready for DECIDE.
 """
 from estimation.road_yaw import off_road_deg
-from robot_types import Action, SignType, State, UiCommand
+from robot_types import Action, RunMode, SignType, State, UiCommand
+
+_MODE_COMMANDS = {UiCommand.MODE_DRIVE: RunMode.DRIVE,
+                  UiCommand.MODE_INTERSECTION: RunMode.QUIZ_INTERSECTION,
+                  UiCommand.MODE_SIGNS: RunMode.QUIZ_SIGNS}
 
 # States where the robot is moving and must keep seeing the lane.
 _LANE_STATES = (State.LANE_FOLLOW, State.APPROACH, State.REACQUIRE)
@@ -30,6 +34,7 @@ class Behaviour:
         self.signs_enabled = signs_enabled
         self.exposure_hold = exposure_hold
         self.drift_request = drift_request
+        self.mode = RunMode[cfg.START_MODE]
         self.state = None
         self.state_t = 0.0                 # time the current state was entered
         self.stop_reason = None            # why SAFE_STOP was entered
@@ -67,17 +72,30 @@ class Behaviour:
 
     def _apply_commands(self, commands, now):
         # STOP from any state -> IDLE. START in SAFE_STOP -> IDLE; START in
-        # IDLE is remembered for _on_idle. True if the state changed here.
+        # IDLE is remembered for _on_idle, except in QUIZ_SIGNS, where the
+        # robot never moves. A mode command is obeyed only in IDLE. True if
+        # the state changed here.
         if UiCommand.STOP in commands and self.state != State.IDLE:
             self._enter(State.IDLE, now)
             return True
+        self._apply_mode(commands)
         if UiCommand.START in commands:
             if self.state == State.SAFE_STOP:
                 self._enter(State.IDLE, now)
                 return True
-            if self.state == State.IDLE:
+            if self.state == State.IDLE and self.mode != RunMode.QUIZ_SIGNS:
                 self._start_requested = True
         return False
+
+    def _apply_mode(self, commands):
+        # The last mode command wins; ignored outside IDLE.
+        if self.state != State.IDLE:
+            return
+        for command in commands:
+            if command in _MODE_COMMANDS and _MODE_COMMANDS[command] != self.mode:
+                self.mode = _MODE_COMMANDS[command]
+                self._start_requested = False
+                self._set_sign_flag()
 
     def _recovering(self, imu, road_yaw, now):
         # True while knocked more than RECOVER_DEG off the road's direction
@@ -141,9 +159,14 @@ class Behaviour:
             self._lane_seen_t = now        # fresh grace period on start
         self._set_flag(self.exposure_hold, state != State.LANE_FOLLOW)
         self._set_flag(self.drift_request, state in _STILL_STATES)
-        if state == State.APPROACH:
+        self._set_sign_flag()
+
+    def _set_sign_flag(self):
+        # Signs are read all the time in QUIZ_SIGNS; otherwise from APPROACH
+        # until the junction is left (LANE_FOLLOW, IDLE or SAFE_STOP).
+        if self.mode == RunMode.QUIZ_SIGNS or self.state == State.APPROACH:
             self._set_flag(self.signs_enabled, True)
-        elif state in (State.LANE_FOLLOW, State.IDLE, State.SAFE_STOP):
+        elif self.state in (State.LANE_FOLLOW, State.IDLE, State.SAFE_STOP):
             self._set_flag(self.signs_enabled, False)
 
     @staticmethod

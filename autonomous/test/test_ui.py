@@ -18,7 +18,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import config  # noqa: E402
-from robot_types import (DriveCmd, FrontLaneObs, FrontResult, HealthWarning, ImuSample,
+from robot_types import (RunMode, DriveCmd, FrontLaneObs, FrontResult, HealthWarning, ImuSample,
                          LaneEstimate, MotorCmd, RoadYaw, SideLaneObs, SideResult, State,
                          UiCommand, UiPacket)
 from tools.ui_demo import demo_packet, synthetic_front
@@ -251,7 +251,7 @@ def view_packet():
 
 class FakeSys:
     class behaviour:
-        state, stop_reason = State.LANE_FOLLOW, None
+        state, stop_reason, mode = State.LANE_FOLLOW, None, RunMode.QUIZ_SIGNS
 
 
 def test_make_ui_packet_views_only_when_asked():

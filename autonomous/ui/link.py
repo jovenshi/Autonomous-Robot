@@ -11,7 +11,9 @@ import queue
 from robot_types import UiCommand, UiPacket
 from ui.screen import run_ui
 
-_MAIN_COMMANDS = (UiCommand.START, UiCommand.STOP)    # NEXT_VIEW stays in the UI
+# Commands the control loop acts on; NEXT_VIEW stays in the UI.
+_MAIN_COMMANDS = (UiCommand.START, UiCommand.STOP, UiCommand.MODE_DRIVE,
+                  UiCommand.MODE_INTERSECTION, UiCommand.MODE_SIGNS)
 
 
 def start_ui(cfg):
@@ -47,6 +49,7 @@ def make_ui_packet(sys, now, drive, motor, lane, road_yaw, imu, sign_vote, fps, 
         drive=drive, motor=motor, lane=lane, road_yaw=road_yaw, imu=imu, sign_vote=sign_vote,
         fps=dict(fps), overruns=overruns, warnings=tuple(warnings),
         front=front if include_views else None, side=side if include_views else None,
+        mode=sys.behaviour.mode,
     )
 
 
@@ -59,7 +62,7 @@ def send(packet_q, packet):
 
 
 def read_commands(cmd_q):
-    # Every UI command waiting, without blocking: START and STOP only.
+    # Every UI command waiting, without blocking: START, STOP and the modes.
     out = []
     while True:
         try:

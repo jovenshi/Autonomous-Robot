@@ -192,7 +192,7 @@ class FrontResult:
     view: np.ndarray                   # 320 x 240 image for the display
     lane: FrontLaneObs
     location: Optional[LocationEvidence]   # None until perception/location.py is built
-    sign: Optional[SignObs]            # None when sign reading is off this frame
+    sign: Optional[SignObs]            # newest sign reading (see its seq); None while signs are off
     mean_v: float
     t: float
     seq: int

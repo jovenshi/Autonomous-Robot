@@ -1,6 +1,6 @@
 # Quiz 3 plan: sign reading, location zones, modes, audio
 
-**Status:** stage 2 done (sign reading on saved images), 2026-11-10, branch `quiz3`. Section 1 is the approved brief, kept word for word. Sections 2 to
+**Status:** stage 3 done (sign quiz on the display), 2026-11-10, branch `quiz3`. Section 1 is the approved brief, kept word for word. Sections 2 to
 4 are the inventory taken from the code before any change. Stage 9 rewrites
 this file to match what was built.
 
@@ -215,4 +215,9 @@ these are the edits it needs.
 | 2 | `train_signs` | Holds out recordings by name (`--holdout`), taken from the crop file names |
 | 2 | Test data | `test/data/no_sign/`: 4 real course frames (the ones with the most white clutter), since `recordings/` is git-ignored |
 | 2 | `ZONE_REF_X_M = 0.0` | The rear axle decides the zone (the robot spans two zones at once, so one point must) |
-
+| 3 | `FrontResult.sign` | Carries the newest sign reading on every frame while signs are on (its `seq` says which frame it is from), not only on sign frames. Signs are read on one frame in three and the slot holds one result, so a reading would otherwise be overwritten before the control loop or display saw it. `SignVoter` already ignores a repeated `seq` |
+| 3 | `SignPacer` (`perception/pipeline.py`) | Per-thread state for `SIGN_HZ` pacing and the newest reading (BUILD_STATUS question 33) |
+| 3 | `SignVoter.decided()` | Returns a `SignVote`. The box is held through missed frames for as long as the decision is |
+| 3 | Mode selection before the PS5 controller | Keys 1 / 2 / 3 on the display keyboard, and `1` / `2` / `3` + Enter in the terminal, send the mode commands. QUIZ_INTERSECTION is selectable but drives like DRIVE until stage 6 |
+| 3 | Display | A 30 px mode banner tops every view, with the voted sign on its right. The camera image is letterboxed under it. The crop in the sign panel is cut from the 320 x 240 view (the display process has no full frame), then normalised as on the robot |
+| 3 | Missing model | `main.py` warns and carries on: signs are boxed but not read |

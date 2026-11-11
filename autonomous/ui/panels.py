@@ -46,6 +46,28 @@ def draw_header(img, rect, packet):
     draw_text(img, "SPEED", (x + w - 24, y + 76), 13, MUTED, bold=True, align="right")
 
 
+def draw_banner(img, rect, packet, cfg):
+    # The run mode on every view ("Sign Reading", ...), and on the right
+    # the voted sign.
+    x, y, w, h = rect
+    img[y:y + h, x:x + w] = PANEL
+    cv2.line(img, (x, y + h - 1), (x + w, y + h - 1), LINE, 1)
+    if packet is None:
+        return
+    draw_text(img, cfg.MODE_LABELS[packet.mode.name], (x + 12, y + h - 9), 20, TEXT, bold=True)
+    vote = packet.sign_vote
+    if vote is not None:
+        draw_text(img, f"Sign: {cfg.SIGN_PHRASES[vote.sign.name]}", (x + w - 12, y + h - 9), 20,
+                  GREEN, bold=True, align="right")
+
+
+def quiz_rows(packet, cfg):
+    vote = packet.sign_vote
+    return [("mode", cfg.MODE_LABELS[packet.mode.name], TEXT),
+            ("sign", cfg.SIGN_PHRASES[vote.sign.name] if vote is not None else "none",
+             GREEN if vote is not None else MUTED)]
+
+
 def draw_lane_gauge(img, rect, lane, cfg):
     # The line is the centre tick; the robot marker sits at the lateral error
     # (+/-UI_CHART_LAT_M across the gauge), right of the line when lateral +.
@@ -102,7 +124,7 @@ def draw_status(img, packet, cfg):
     # Every number, as label/value rows in two columns of sections.
     h, w = img.shape[:2]
     left = (("DRIVE", drive_rows(packet)), ("LANE", lane_rows(packet)),
-            ("ROAD YAW", road_yaw_rows(packet)))
+            ("ROAD YAW", road_yaw_rows(packet)), ("QUIZ", quiz_rows(packet, cfg)))
     right = (("IMU", imu_rows(packet)), ("HEALTH", health_rows(packet)),
              ("PRE-FLIGHT", [(label, "ok" if ok else "NO", GREEN if ok else RED)
                              for label, ok in preflight(packet, cfg)]))

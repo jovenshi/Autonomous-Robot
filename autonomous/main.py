@@ -7,6 +7,7 @@ The side camera, sign voter and display are added as they are written.
 Run from the robot/ folder:  python main.py
     Enter            START  (again after SAFE_STOP: once to IDLE, once to drive)
     s then Enter     STOP   (back to IDLE)
+    1 / 2 / 3 Enter  mode: drive / intersection quiz / sign quiz (only in IDLE)
     Ctrl-C           quit; motors are stopped first
 
 Test on a stand with the wheels off the ground before the first real run.
@@ -19,6 +20,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 import config
+from behavior.sign_voter import SignVoter
 from behavior.state_machine import Behaviour
 from control.command import drive_for_state
 from control.lane_controller import LaneController
@@ -32,7 +34,8 @@ from hal.imu import ImuReader
 from hal.sabertooth import SabertoothDriver
 from loop_log import LoopLog
 from perception.front_lane import LaneTracker
-from perception.pipeline import process_front_frame
+from perception.pipeline import SignPacer, process_front_frame
+from perception.signs import load_sign_model
 from robot_types import LatestValue, State, UiCommand
 from tools.calib_status import startup_line
 from ui.link import make_ui_packet, read_commands, send, start_ui, stop_ui
@@ -53,6 +56,7 @@ class System:
     road_yaw: RoadYawTracker
     behaviour: Behaviour
     commands: queue.Queue
+    voter: object = None                  # SignVoter; None in tests without one
     imu: object = None                    # ImuReader; None in tests without one
     imu_slot: LatestValue = field(default_factory=LatestValue)
     loop_log: object = None               # LoopLog, or None when LOOP_LOG_ENABLED is off
@@ -63,6 +67,7 @@ class System:
     prev_state: State = State.IDLE
     overrun_times: deque = field(default_factory=deque)
     last_warnings: tuple = ()
+    last_seen: tuple = (None, None)       # (mode, voted sign) last printed
     last_status_t: float = 0.0
     last_drive: object = None
 
@@ -96,7 +101,8 @@ def build_system(cfg):
         exposure_hold=exposure_hold, front_cam=front_cam, front_exposure=front_exposure,
         saber=saber, lane_ctrl=LaneController(cfg), road_yaw=RoadYawTracker(cfg),
         behaviour=Behaviour(cfg, signs_enabled, exposure_hold, drift_request),
-        commands=commands, imu=imu, imu_slot=imu_slot, loop_log=_open_loop_log(cfg),
+        commands=commands, voter=SignVoter(cfg), imu=imu, imu_slot=imu_slot,
+        loop_log=_open_loop_log(cfg),
         ui_process=ui[0], ui_packet_q=ui[1], ui_cmd_q=ui[2],
     )
 
@@ -114,9 +120,11 @@ def _build_front_camera(cfg, slot, signs_enabled, exposure_hold):
     source = CsiSource(cfg.FRONT_CAM_NUM, cfg.FRONT_SIZE, cfg)
     exposure = ExposureControl(source, "front", cfg)
     tracker = LaneTracker()                          # search window, camera thread only
+    sign_model, pacer = _open_sign_model(cfg), SignPacer()
 
     def process(frame):
-        result = process_front_frame(frame, signs_enabled.is_set(), cfg, tracker)
+        result = process_front_frame(frame, signs_enabled.is_set(), cfg, tracker,
+                                     sign_model, pacer)
         exposure.manage_step(result.mean_v, exposure_hold.is_set())
         return result
 
@@ -126,16 +134,30 @@ def _build_front_camera(cfg, slot, signs_enabled, exposure_hold):
     return stream, exposure
 
 
+def _open_sign_model(cfg):
+    # The trained sign model, or None with a warning: the robot still
+    # drives, and the display shows sign candidates without labels.
+    try:
+        return load_sign_model(cfg.SIGN_MODEL_PATH, cfg)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Warning: {e}\n         Signs will be boxed but not read.")
+        return None
+
+
+_KEYS = {"s": UiCommand.STOP, "1": UiCommand.MODE_DRIVE, "2": UiCommand.MODE_INTERSECTION,
+         "3": UiCommand.MODE_SIGNS}
+
+
 def _start_keyboard(commands):
-    # Terminal stand-in for the display: Enter = START, "s" + Enter = STOP.
+    # Terminal stand-in for the display: Enter = START, "s" + Enter = STOP,
+    # 1 / 2 / 3 + Enter = drive / intersection quiz / sign quiz mode.
     def read_keys():
         while True:
             try:
                 line = input()
             except EOFError:
                 return
-            key = line.strip().lower()
-            commands.put(UiCommand.STOP if key == "s" else UiCommand.START)
+            commands.put(_KEYS.get(line.strip().lower(), UiCommand.START))
 
     threading.Thread(target=read_keys, name="keyboard", daemon=True).start()
 
@@ -161,8 +183,11 @@ def control_step(sys, now):
     fps, overruns = {"front": sys.front_cam.fps()}, _recent_overruns(sys, now)
     warnings = check_health(front, None, imu_raw, lane, road_yaw, fps,
                             overruns, sys.saber.serial_error, now, cfg)
-    state = sys.behaviour.step(front, None, lane, road_yaw, None, imu_raw, commands,
+    vote = _sign_vote(sys, front, now)
+    state = sys.behaviour.step(front, None, lane, road_yaw, vote, imu_raw, commands,
                                sys.saber.serial_error, now)
+    if not sys.signs_enabled.is_set():
+        vote = _sign_vote(sys, front, now)           # sign reading went off this loop: clear
     if state in _LANE_STATES and state != sys.prev_state:
         sys.lane_ctrl.reset()
 
@@ -176,10 +201,24 @@ def control_step(sys, now):
         include_views = sys.ui_loops % cfg.UI_IMAGE_EVERY == 0
         sys.ui_loops += 1
         send(sys.ui_packet_q, make_ui_packet(sys, now, drive, motor, lane, road_yaw, imu_raw,
-                                             None, fps, overruns, warnings, front, None,
+                                             vote, fps, overruns, warnings, front, None,
                                              include_views))
-    _report(sys, state, lane, imu, road_yaw, warnings, now)
+    _report(sys, state, lane, imu, road_yaw, warnings, now, vote)
     sys.prev_state = state
+
+
+def _sign_vote(sys, front, now):
+    # Feeds the newest fresh sign reading to the voter -> SignVote or None.
+    # With sign reading off the voter is cleared, so an old sign never
+    # lingers into the next time it is switched on.
+    if sys.voter is None:
+        return None
+    if not sys.signs_enabled.is_set():
+        sys.voter.reset()
+        return None
+    if front is not None and front.sign is not None and is_fresh(front.sign, now, sys.cfg):
+        sys.voter.add(front.sign)
+    return sys.voter.decided()
 
 
 def _read_commands(commands):
@@ -198,9 +237,16 @@ def _recent_overruns(sys, now):
     return len(sys.overrun_times)
 
 
-def _report(sys, state, lane, imu, road_yaw, warnings, now):
-    # Terminal output until the display exists: state changes and warning
-    # changes at once, a status line every STATUS_PRINT_S.
+def _report(sys, state, lane, imu, road_yaw, warnings, now, vote=None):
+    # Terminal output: state, mode, voted sign and warning changes at once,
+    # a status line every STATUS_PRINT_S.
+    seen = (sys.behaviour.mode, vote.sign if vote is not None else None)
+    if seen != sys.last_seen:
+        if seen[0] != sys.last_seen[0]:
+            print(f"Mode: {sys.cfg.MODE_LABELS[seen[0].name]}")
+        if seen[1] != sys.last_seen[1]:
+            print("Sign: " + (sys.cfg.SIGN_PHRASES[seen[1].name] if seen[1] else "none"))
+        sys.last_seen = seen
     if state != sys.prev_state:
         reason = f" ({sys.behaviour.stop_reason})" if sys.behaviour.stop_reason else ""
         print(f"State: {sys.prev_state.name} -> {state.name}{reason}")
@@ -281,6 +327,7 @@ def main():
         print(startup_line(config))
         system = build_system(config)
         print("Ready. Enter = START, s + Enter = STOP, Ctrl-C = quit")
+        print("Modes: 1 + Enter = drive, 2 + Enter = intersection quiz, 3 + Enter = sign quiz")
         run(system)
     except KeyboardInterrupt:
         print("\nStopping")

@@ -5,9 +5,10 @@ it waits on the packet queue with get(timeout) until the next redraw (every
 packet goes into the strip chart and keeps the last camera views), composes
 the chosen view as one DISPLAY_SIZE BGR image, and shows it with pygame.
 
-Layout (800 x 480): a 4:3 main area (640 x 480; camera views are
-letterboxed into it, never stretched) and a 160 px control column on the
-right in every view: START, STOP (not an e-stop), the warning light and VIEW.
+Layout (800 x 480): a main area (640 x 480) with the run-mode banner along
+its top in every view (camera views are letterboxed under it, never
+stretched) and a 160 px control column on the right in every view: START,
+STOP (not an e-stop), the warning light and VIEW.
 Views cycle DRIVE (glanceable, default) -> CAMERA -> DIAGNOSTIC (every number).
 
 pygame is imported only inside this process, after the display environment
@@ -23,9 +24,10 @@ import numpy as np
 
 from robot_types import State, UiCommand
 from ui.overlay import (AMBER, BG, GREEN, LINE, MUTED, PANEL, RED, TEXT, draw_front_overlay,
-                        draw_no_data, draw_side_overlay, mark_stale)
-from ui.panels import (History, draw_chart, draw_header, draw_lane_gauge, draw_preflight,
-                       draw_status, draw_steer_bar, preflight)
+                        draw_no_data, draw_side_overlay, draw_sign_overlay, draw_sign_panel,
+                        mark_stale)
+from ui.panels import (History, draw_banner, draw_chart, draw_header, draw_lane_gauge,
+                       draw_preflight, draw_status, draw_steer_bar, preflight)
 from tools.calib_status import check_status
 from ui.text import draw_text
 
@@ -36,6 +38,10 @@ TAP_COMMANDS = {"start": UiCommand.START, "stop": UiCommand.STOP, "next": UiComm
 START_STATES = (State.IDLE, State.SAFE_STOP)        # space bar means START here
 INSET_FRAC = 0.33                                   # side-camera inset, fraction of main width
 GAP = 16                                            # px; margin inside the main area
+BANNER_H = 30                                       # px; run-mode banner along the top
+SIGN_PANEL = (250, 112)                             # px; crop, label and scores in the camera view
+MODE_KEYS = {"K_1": UiCommand.MODE_DRIVE, "K_2": UiCommand.MODE_INTERSECTION,
+             "K_3": UiCommand.MODE_SIGNS}          # pygame key name -> command
 
 
 def make_layout(display_size):
@@ -59,6 +65,7 @@ class Screen:
         self.packet = None               # newest packet
         self.front = None                # last FrontResult received (with view)
         self.side = None
+        self.sign = None                 # last SignObs received (signs are read at SIGN_HZ)
         self.quit = False
         self.camera = check_status(cfg)  # (ok, text); read once: no calibration runs during a drive
 
@@ -68,6 +75,8 @@ class Screen:
         self.history.add(packet)
         if packet.front is not None:
             self.front = packet.front
+            if packet.front.sign is not None:
+                self.sign = packet.front.sign
         if packet.side is not None:
             self.side = packet.side
 
@@ -79,7 +88,9 @@ class Screen:
         w, h = self.cfg.DISPLAY_SIZE
         frame = np.empty((h, w, 3), np.uint8)
         frame[:] = BG
-        main = _sub(frame, self.layout["main"])
+        x, y, mw, mh = self.layout["main"]
+        draw_banner(frame, (x, y, mw, BANNER_H), packet, self.cfg)
+        main = _sub(frame, (x, y + BANNER_H, mw, mh - BANNER_H))
         if packet is None:
             draw_no_data(main, "robot link")
         else:
@@ -120,9 +131,16 @@ class Screen:
         draw_chart(main, (GAP, 300, inner, h - 300 - GAP), self.history, self.cfg)
 
     def _draw_camera_view(self, main, packet):
-        # Front camera filling the main area; side camera as an inset.
+        # Front camera at 4:3, centred in the main area, with the sign box,
+        # label, crop and scores; side camera as an inset.
         h, w = main.shape[:2]
-        main[:] = self._camera_image("front", (w, h))
+        cw = min(w, h * 4 // 3)
+        cx0 = (w - cw) // 2
+        main[:, cx0:cx0 + cw] = self._camera_image("front", (cw, h), packet)
+        pw, ph = SIGN_PANEL
+        draw_sign_panel(main, (cx0 + cw - pw - GAP, h - ph - 2 * GAP, pw, ph),
+                        self.front.view if self.front is not None else None,
+                        self._fresh_sign(), packet.sign_vote, self.cfg)
         iw = int(w * INSET_FRAC)
         ih = iw * 3 // 4
         x0 = w - iw - GAP
@@ -132,7 +150,14 @@ class Screen:
     def _draw_diagnostic_view(self, main, packet):
         draw_status(main, packet, self.cfg)
 
-    def _camera_image(self, kind, size):
+    def _fresh_sign(self):
+        # The last sign reading, or None once it is older than UI_VIEW_STALE_S
+        # (sign reading switched off, or the camera stopped).
+        if self.sign is None or self.clock() - self.sign.t > self.cfg.UI_VIEW_STALE_S:
+            return None
+        return self.sign
+
+    def _camera_image(self, kind, size, packet=None):
         # The kept view enlarged to size, then annotated at that size; STALE
         # when old, NO DATA if nothing has ever arrived.
         result = self.front if kind == "front" else self.side
@@ -144,6 +169,8 @@ class Screen:
         scale = size[0] / result.view.shape[1]
         if kind == "front":
             draw_front_overlay(img, result, scale)
+            draw_sign_overlay(img, self._fresh_sign(),
+                              packet.sign_vote if packet is not None else None, self.cfg, scale)
         else:
             draw_side_overlay(img, result, self.cfg, scale)
         age = self.clock() - result.t
@@ -183,6 +210,9 @@ class Screen:
             return UiCommand.START if state in START_STATES else UiCommand.STOP
         if key == pygame.K_v:
             return UiCommand.NEXT_VIEW
+        for name, command in MODE_KEYS.items():
+            if key == getattr(pygame, name):
+                return command
         if key == pygame.K_q:
             self.quit = True
         return None
@@ -286,7 +316,8 @@ def _drain(packet_q, screen, until):
 
 
 def _route(command, screen, cmd_q):
-    # NEXT_VIEW stays here; START and STOP go to main (dropped if its queue is full).
+    # NEXT_VIEW stays here; START, STOP and the mode commands go to main
+    # (dropped if its queue is full).
     if command == UiCommand.NEXT_VIEW:
         screen.next_view()
     elif command is not None:

@@ -1,7 +1,6 @@
 # Quiz 3 plan: sign reading, location zones, modes, audio
 
-**Status:** stage 0 (plan). Saved 2026-11-10 on branch `quiz3`. Nothing is
-built yet. Section 1 is the approved brief, kept word for word. Sections 2 to
+**Status:** stage 1 done (types and config), 2026-11-10, branch `quiz3`. Section 1 is the approved brief, kept word for word. Sections 2 to
 4 are the inventory taken from the code before any change. Stage 9 rewrites
 this file to match what was built.
 
@@ -160,6 +159,41 @@ Proposed, not named anywhere yet (to confirm):
   a Plugable USB audio device (ALSA card 2), `text2wave` and `festival`. No
   game controller was connected.
 
-## 5. Open questions
+## 5. Answers (2026-11-10)
 
-Asked 2026-11-10; answers get written here.
+| # | Question | Answer | Where it lands |
+| --- | --- | --- | --- |
+| 1 | Zone boundaries | The course zone diagram. Read off it, scaled by `ROAD_WIDTH_M`: Read the sign from 0.73 m before the centre, Pause zone from where the road widens (0.28 m), Entering from 0.17 m, Turn zone ±0.04 m about the crossing line, Exiting to 0.18 m past, then Continue travel. **To confirm with a tape.** | `ZONE_BOUNDS_M` |
+| 1 | Point the judges watch | **Still open** | `ZONE_REF_X_M` (None) |
+| 2 | PS5 buttons | Cross is both START and STOP; the rest were mine to choose: Square = Sign Reading, Triangle = Intersection Detection, Circle = Drive, Options = next view | `PS5_BUTTONS` |
+| 3 | Sign position | In front and to the left, about 1 inch off the ground: the left corner of the junction on the far side of the cross road | `SIGN_ROI`, set from the sign recordings in stage 2 |
+| 4 | Side camera | Final position: right side, a couple of inches before the rear axle, angled outward. It can't see the road edge on a straight; it sees road when the robot comes into a junction | `SIDE_CAM_DEVICE` set; stage 8 can go ahead |
+| 5 | `SPEED_MPS_PER_UNIT` | Not measured | Needed before stage 6: dead reckoning places every zone from about Pause onward |
+| 6 | `test_sound.py` | Passes on the Pi | The announcer can use `USB_SoundController` as it is |
+| 7 | Pause sign | The red octagon is in a black box, like the arrows | One candidate test serves all four signs |
+| 8 | Crossing line | Yellow dotted line across the junction | `crossing_line_row` must accept a dashed line |
+| 9 | Flare to centre | Roughly 0.28 m | `FLARE_TO_CENTRE_M` |
+| 10 | `FrontResult.inter` | Renamed `FrontResult.location` (a `LocationEvidence`); `UiPacket.location` is the `LocationObs` | done in stage 1 |
+| 11 | Banner and spoken text | As proposed | `MODE_LABELS`, `SIGN_PHRASES`, `ZONE_PHRASES` |
+| 12 | `draw_annotations` in stage 2 | Yes | stage 2 |
+| 13 | Removals | `SIGN_SIDE` removed in stage 1; `APPROACH_ON`, `APPROACH_OFF`, `STOP_LINE_Y_FRAC` in stage 6 | |
+| 14 | Proposed config names | Fine | |
+
+## 6. Changes these answers make to DESIGN.md
+
+`DESIGN.md` is an export and is not edited here. The live doc could not be
+edited from the build session on 2026-11-10 (no Claude Docs connector), so
+these are the edits it needs.
+
+| Section of the design | Says | Should say |
+| --- | --- | --- |
+| Overview, Hardware (side camera), Key design decision 1 | The right-side camera faces down and measures the distance to the right road edge on straights | The side camera is angled outward, a couple of inches before the rear axle on the right. It can't see the road edge on a straight. It sees road only coming into a junction, so its job is a surface box (grass, road or yellow) that fixes the robot's position at a junction |
+| Side camera in decisions; Fusing lateral error; Lane filter; `side_lane.py`; `SideBias` | Side lateral reading fused with the front camera | Not possible with this mount: on straights lateral error comes from the front camera alone. `SIDE_FUSION_ENABLED`, `SideBias`, `find_boundary_x`, `edge_to_offset` and the side terms of `LaneFilter` have no input. The opening and edge-back cues become surface changes in `SIDE_BOX` |
+| Key design decision 5; `perception/signs.py` | Four-cornered white blobs on `SIGN_SIDE` of the road; STOP | White panel inside a black box, about 1.65 wide to tall, searched for inside `SIGN_ROI`; the fourth sign is PAUSE (a red octagon, also in a black box) |
+| Open question "Sign placement" | Which side, what height | Front left, about 1 inch off the ground, at the left corner on the far side of the cross road |
+| Open question "Junction shapes" | Four-way or T | The quiz junction is four-way with rounded corners; the road starts to widen about 0.28 m before the centre, and a yellow dotted line crosses it |
+| Open question "Stop sign behaviour" | Where to stop | The course defines six zones along the road (`Zone`, `ZONE_BOUNDS_M`); the Pause zone runs from the widening to the cross road's near edge |
+| Open question "Start and emergency stop" | Tap, key or button | PS5 Cross button starts and stops, as well as the screen and keyboard |
+| Runtime table; `ui` process | Display process draws and reads taps | Operator process: display, PS5 controller and audio. A vision worker process does location and sign image work |
+| Data types | `IntersectionObs`, `FrontResult.inter`, `SignType.STOP`, `Action.STOP` | `LocationEvidence`, `FrontResult.location`, `PAUSE`; plus the types in section 1 |
+| Config: Junctions and signs | `SIGN_SIDE`, `OCTAGON_CORNERS`, `ARROW_ASYM_MIN` | removed; new names in section 3 |

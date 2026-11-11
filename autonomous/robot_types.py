@@ -32,14 +32,14 @@ import numpy as np
 
 class SignType(Enum):
     NONE = auto()
-    STOP = auto()
+    PAUSE = auto()             # red octagon ("STOP" in the Oct 9 design)
     LEFT = auto()
     RIGHT = auto()
     STRAIGHT = auto()
 
 
 class Action(Enum):
-    STOP = auto()
+    PAUSE = auto()
     LEFT = auto()
     RIGHT = auto()
     STRAIGHT = auto()
@@ -69,12 +69,46 @@ class HealthWarning(Enum):  # "Warning" in the design; renamed to avoid the buil
     LANE_CONF_LOW = auto()
     LOOP_OVERRUN = auto()
     MOTOR_SERIAL_ERROR = auto()
+    VISION_STALE = auto()
 
 
 class UiCommand(Enum):
     START = auto()
     STOP = auto()
     NEXT_VIEW = auto()
+    MODE_DRIVE = auto()
+    MODE_INTERSECTION = auto()
+    MODE_SIGNS = auto()
+
+
+class Zone(Enum):
+    # Where the robot is along one junction pass, in driving order:
+    # CONTINUE, READ_SIGN, PAUSE, ENTERING, TURN, EXITING, then CONTINUE again.
+    CONTINUE = auto()
+    READ_SIGN = auto()
+    PAUSE = auto()
+    ENTERING = auto()
+    TURN = auto()
+    EXITING = auto()
+
+
+class RunMode(Enum):
+    DRIVE = auto()
+    QUIZ_INTERSECTION = auto()
+    QUIZ_SIGNS = auto()
+
+
+class Surface(Enum):
+    GRASS = auto()
+    ROAD = auto()
+    YELLOW = auto()
+
+
+class AnnotationKind(Enum):
+    RECT = auto()              # pts: two opposite corners
+    LINE = auto()              # pts: two ends
+    POINT = auto()             # pts: one point
+    TEXT = auto()              # pts: where the text starts
 
 
 # ---------------------------------------------------------------- cameras
@@ -111,9 +145,24 @@ class FrontLaneObs:
 
 
 @dataclass(frozen=True)
-class IntersectionObs:
-    approach_score: float              # 0-1
-    crossing_line_y: Optional[int]     # px row, or None
+class Annotation:
+    # One thing to draw on a camera view. Perception makes these on the frame
+    # it measured; ui/overlay.py draws them without knowing what they mean.
+    kind: AnnotationKind
+    pts: tuple[tuple[float, float], ...]   # (x, y) in view pixels (lane size)
+    text: str = ""
+    colour: tuple[int, int, int] = (255, 255, 255)   # BGR
+    cam_id: str = "front"                  # 'front' or 'side'
+
+
+@dataclass(frozen=True)
+class LocationEvidence:
+    # What one frame says about where the junction is. Distances are metres
+    # ahead of the rear axle; None = not seen this frame.
+    crossing_dist_m: Optional[float]   # to the crossing road's yellow line
+    flare_dist_m: Optional[float]      # to where the road starts to widen
+    side_surface: Optional[Surface]    # under the side camera's box, or None
+    annotations: tuple[Annotation, ...]
     t: float
     seq: int
 
@@ -121,17 +170,28 @@ class IntersectionObs:
 @dataclass(frozen=True)
 class SignObs:
     sign: SignType
-    score: float                                    # 0-1
+    score: float                                    # SVM margin: best class minus runner-up
     bbox: Optional[tuple[int, int, int, int]]       # x, y, w, h in full-frame px
     t: float
     seq: int
+    roi: Optional[tuple[int, int, int, int]] = None   # searched region, x, y, w, h in view px
+    scores: tuple[tuple[str, float], ...] = ()        # (class name, score) for every class
+    annotations: tuple[Annotation, ...] = ()
+
+
+@dataclass(frozen=True)
+class SignModel:
+    hog: object                # cv2.HOGDescriptor built from the model file's settings
+    weights: np.ndarray        # one row per class
+    biases: np.ndarray         # one per class
+    classes: tuple[str, ...]   # SignType names, in row order
 
 
 @dataclass(frozen=True)
 class FrontResult:
     view: np.ndarray                   # 320 x 240 image for the display
     lane: FrontLaneObs
-    inter: Optional[IntersectionObs]   # None until junction detection is built
+    location: Optional[LocationEvidence]   # None until perception/location.py is built
     sign: Optional[SignObs]            # None when sign reading is off this frame
     mean_v: float
     t: float
@@ -188,6 +248,37 @@ class RoadYaw:
     valid: bool
 
 
+@dataclass(frozen=True)
+class LocationObs:
+    zone: Zone
+    sign_read_ready: bool              # in READ_SIGN: signs can be read
+    pause_point_ready: bool            # reached the PAUSE zone
+    turn_point_ready: bool             # reached the TURN zone
+    dist_to_centre_m: Optional[float]  # rear axle to the junction centre; + = still ahead
+    conf: float                        # 0-1
+    source: str                        # 'crossing', 'flare', 'side', 'dead_reckoning' or 'none'
+    t: float
+
+
+# ---------------------------------------------------------------- behaviour
+
+@dataclass(frozen=True)
+class SignVote:
+    sign: SignType
+    bbox: Optional[tuple[int, int, int, int]]   # median of recent boxes, full-frame px
+    since_t: float                              # when this sign won the vote
+
+
+# ---------------------------------------------------------------- vision worker
+
+@dataclass(frozen=True)
+class VisionResult:
+    location: Optional[LocationEvidence]
+    sign: Optional[SignObs]
+    t: float
+    seq: int
+
+
 # ---------------------------------------------------------------- control
 
 @dataclass(frozen=True)
@@ -214,12 +305,14 @@ class UiPacket:
     lane: Optional[LaneEstimate]
     road_yaw: Optional[RoadYaw]
     imu: Optional[ImuSample]
-    sign_vote: Optional[SignType]
+    sign_vote: Optional[SignVote]
     fps: dict[str, float]              # per camera: 'front', 'side'
     overruns: int
     warnings: tuple[HealthWarning, ...]
     front: Optional[FrontResult]       # with view, or None
     side: Optional[SideResult]         # with view, or None
+    mode: RunMode = RunMode.DRIVE
+    location: Optional[LocationObs] = None
 
 
 # ---------------------------------------------------------------- slots

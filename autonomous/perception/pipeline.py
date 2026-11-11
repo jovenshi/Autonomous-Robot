@@ -1,7 +1,7 @@
 """Camera thread entry points: one call per frame, one result object out.
 
-process_side_frame is added with perception/side_lane.py; junction detection
-and sign reading are added with intersection.py and signs.py.
+process_side_frame is added with perception/side_lane.py; location evidence
+and sign reading are added with location.py and signs.py.
 """
 from perception.color import make_front_masks
 from perception.front_lane import process_front_lane
@@ -9,7 +9,7 @@ from robot_types import FrontResult
 
 
 def process_front_frame(frame, signs_enabled, cfg, tracker=None):
-    # Front thread entry: masks once, then lane. Junction and sign results
+    # Front thread entry: masks once, then lane. Location and sign results
     # are None until those modules exist; signs_enabled is accepted now so
     # the signature (and build_system's partial) won't change later.
     # tracker: the camera thread's LaneTracker (search window), or None.
@@ -18,7 +18,7 @@ def process_front_frame(frame, signs_enabled, cfg, tracker=None):
     return FrontResult(
         view=masks.bgr,              # shared with the display; draw on a copy
         lane=lane,
-        inter=None,
+        location=None,
         sign=None,
         mean_v=masks.mean_v,
         t=frame.t,

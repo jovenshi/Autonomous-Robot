@@ -334,7 +334,7 @@ def test_process_front_frame():
     assert isinstance(result, FrontResult)
     assert result.view.shape == (H, W, 3)
     assert (result.t, result.seq) == (3.5, 42)
-    assert result.inter is None and result.sign is None
+    assert result.location is None and result.sign is None
     assert result.lane.lateral_m == pytest.approx(-0.04, abs=0.003)
     assert 0 < result.mean_v < 255
 

@@ -4,7 +4,6 @@ Run from the robot/ folder:  python -m pytest tests
 """
 import threading
 
-import numpy as np
 import pytest
 
 
@@ -15,8 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import config  # noqa: E402
 from behavior.state_machine import Behaviour, choose_action
-from robot_types import (Action, FrontLaneObs, FrontResult, ImuSample, IntersectionObs,
-                         LaneEstimate, SignType, State, UiCommand)
+from robot_types import Action, ImuSample, LaneEstimate, SignType, State, UiCommand
 
 START, STOP = [UiCommand.START], [UiCommand.STOP]
 
@@ -27,12 +25,6 @@ def lane(ok=True, t=0.0):
 
 def imu(calib=3, t=0.0):
     return ImuSample(0.0, 0.0, True, calib, 0.0, t)
-
-
-def front_with_score(score):
-    lane_obs = FrontLaneObs(0.0, 0.0, 0.9, (), None, 0.0, 1)
-    inter = IntersectionObs(score, None, 0.0, 1)
-    return FrontResult(np.zeros((2, 2, 3), np.uint8), lane_obs, inter, None, 100.0, 0.0, 1)
 
 
 @pytest.fixture
@@ -174,23 +166,25 @@ def test_drift_requested_only_in_idle_and_stop_hold(bd, drift, state):
 # ---------------------------------------------------------------- junction hook
 
 def test_approach_sets_flags_then_reports_not_built(b, flags):
+    # Nothing enters APPROACH until LocationObs drives it (stage 6); entering
+    # it still sets the camera flags, and its handler is still not built.
     start(b, 1.0)
-    assert step(b, 1.1, front=front_with_score(config.APPROACH_ON)) == State.APPROACH
+    b._enter(State.APPROACH, 1.1)
     assert flags[0].is_set() and flags[1].is_set()
     with pytest.raises(NotImplementedError):
         step(b, 1.2)
 
 
-def test_low_score_stays_in_lane_follow(b):
+def test_lane_follow_stays_without_location(b):
     start(b, 1.0)
-    assert step(b, 1.1, front=front_with_score(0.1)) == State.LANE_FOLLOW
+    assert step(b, 1.1) == State.LANE_FOLLOW
 
 
 # ---------------------------------------------------------------- choose_action
 
 @pytest.mark.parametrize("sign, stop_done, action", [
-    (SignType.STOP, False, Action.STOP),
-    (SignType.STOP, True, Action[config.DEFAULT_ACTION]),
+    (SignType.PAUSE, False, Action.PAUSE),
+    (SignType.PAUSE, True, Action[config.DEFAULT_ACTION]),
     (SignType.LEFT, False, Action.LEFT),
     (SignType.RIGHT, False, Action.RIGHT),
     (SignType.STRAIGHT, False, Action.STRAIGHT),

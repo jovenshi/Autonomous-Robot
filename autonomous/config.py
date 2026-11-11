@@ -23,7 +23,7 @@ LANE_LOST_TIMEOUT_S = 0.5       # s
 # ---------------------------------------------------------------- cameras and geometry
 
 FRONT_CAM_NUM = 0
-SIDE_CAM_DEVICE = None          # CONFIRM: your webcam's /dev/v4l/by-id/... path
+SIDE_CAM_DEVICE = "/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._Webcam_Webcam-video-index0"
 SIDE_CAM_FOURCC = "YUYV"
 FRONT_SIZE = (640, 480)
 FRONT_LANE_SIZE = (320, 240)
@@ -156,16 +156,43 @@ CROSS_LINE_MIN_FRAC = 0.5       # fraction of width
 STOP_LINE_Y_FRAC = 0.85         # fraction of height
 SIDE_GREEN_MIN_FRAC = 0.2       # fraction
 SIGN_HZ = 10                    # Hz
-SIGN_SIDE = "right"             # CONFIRM
+SIGN_ROI = None                 # MEASURED from sign recordings: (x, y, w, h) searched, FRONT_LANE_SIZE px; None = whole view
 SIGN_MIN_AREA_PX = 400          # px²
-SIGN_ASPECT_MIN = 0.6           # w / h
-SIGN_ASPECT_MAX = 1.6
-SIGN_RED_MIN_FRAC = 0.15        # fraction of crop
-OCTAGON_CORNERS = (7, 9)        # accepted corner count, inclusive
-ARROW_ASYM_MIN = 1.6            # wide end / narrow end
+SIGN_ASPECT_MIN = 1.3           # w / h; the sign panels are about 1.65 wide to tall
+SIGN_ASPECT_MAX = 2.0
+SIGN_FILL_MIN = 0.8             # candidate area / its bounding rectangle's area
+SIGN_BORDER_PX = 3              # px (lane size); width of the ring tested around a candidate
+SIGN_BORDER_DARK_FRAC = 0.5     # fraction of that ring that must be dark (the black box)
+SIGN_BBOX_PAD_FRAC = 0.08       # the reported box grows by this fraction per side to take in the border
+SIGN_RED_MIN_FRAC = 0.15        # fraction of crop; a PAUSE needs this much red
+SIGN_CROP_PX = 64               # px (square); must match the model file
+SIGN_MARGIN_MIN = 0.5           # SVM margin; use the value tools/train_signs.py suggests
+SIGN_CLAHE_CLIP = 2.0           # clip limit
+SIGN_CLAHE_TILES = (4, 4)       # tile grid
+SIGN_MODEL_PATH = "models/sign_svm.npz"   # relative to autonomous/; written by tools/train_signs.py
+SIGNS_DATA_DIR = "signs_data"   # relative to autonomous/; crops from tools/collect_signs.py
 SIGN_VOTES_NEEDED = 3           # frames
+SIGN_CLEAR_FRAMES = 5           # NONE results in a row before the voter drops its sign
+SIGN_BOX_FRAMES = 5             # recent boxes the voter reports the median of
 DEFAULT_ACTION = "STRAIGHT"     # name of an Action member
 STOP_HOLD_S = 3.0               # s
+
+# ---------------------------------------------------------------- location zones and quiz modes
+# s is the rear axle's distance along the road from the junction centre, in
+# metres, negative before the centre (docs/quiz3_plan.md).
+
+# s at which each zone begins, in driving order: READ_SIGN, PAUSE, ENTERING,
+# TURN, EXITING, CONTINUE. CONFIRM with a tape on the mat: read off the course
+# zone diagram, scaled by ROAD_WIDTH_M; PAUSE starts where the road widens.
+ZONE_BOUNDS_M = (-0.73, -0.28, -0.17, -0.04, 0.04, 0.18)
+ZONE_REF_X_M = None             # CONFIRM: m ahead of the rear axle of the point the judges watch
+FLARE_TO_CENTRE_M = 0.28        # m; MEASURED roughly: where the road starts to widen, to the junction centre
+ZONE_PAUSE_S = 2.0              # s stopped at each zone change, for the judge
+QUIZ_EXIT_M = 0.4               # m past the centre at which QUIZ_INTERSECTION goes back to IDLE
+START_MODE = "DRIVE"            # name of a RunMode member
+SIDE_BOX = None                 # MEASURED: (x, y, w, h) in SIDE_SIZE px whose surface is classified
+VISION_WORKER_ENABLED = False   # False = location and sign work stay in the front camera thread
+VISION_STALE_S = 0.5            # s; newest VisionResult older than this -> VISION_STALE
 
 # ---------------------------------------------------------------- speeds and lane control
 
@@ -289,3 +316,36 @@ STATUS_PRINT_S = 1.0            # s; terminal status line interval (until the di
 LOOP_LOG_ENABLED = True         # one CSV row per control loop (loop_log.py)
 LOOP_LOG_DIR = "logs"            # relative to autonomous/; one file per run
 OVERRUN_WINDOW_S = 1.0          # s; overruns counted over this window for LOOP_OVERRUN
+
+# ---------------------------------------------------------------- operator: PS5 controller and audio
+# PS5_Controller.control_request key -> name of a UiCommand member, or
+# "START_STOP": START in IDLE and SAFE_STOP, STOP anywhere else (as the space bar).
+PS5_BUTTONS = {
+    "reqCross": "START_STOP",
+    "reqSquare": "MODE_SIGNS",
+    "reqTriangle": "MODE_INTERSECTION",
+    "reqCircle": "MODE_DRIVE",
+    "reqOptions": "NEXT_VIEW",
+}
+AUDIO_ENABLED = True
+AUDIO_VOLUME = 0.7              # 0-1
+AUDIO_DIR = "audio"             # relative to autonomous/; phrases rendered to WAV at start-up
+MODE_LABELS = {                 # RunMode name -> banner on every view
+    "DRIVE": "Drive",
+    "QUIZ_INTERSECTION": "Intersection Detection",
+    "QUIZ_SIGNS": "Sign Reading",
+}
+SIGN_PHRASES = {                # SignType name -> label shown and spoken
+    "LEFT": "Left",
+    "RIGHT": "Right",
+    "STRAIGHT": "Straight",
+    "PAUSE": "Pause",
+}
+ZONE_PHRASES = {                # Zone name -> label shown and spoken
+    "READ_SIGN": "Read the sign",
+    "PAUSE": "Pause zone",
+    "ENTERING": "Entering intersection",
+    "TURN": "Turn zone",
+    "EXITING": "Exiting intersection",
+    "CONTINUE": "Continue travel",
+}

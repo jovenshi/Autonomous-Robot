@@ -6,7 +6,7 @@ resulting state into a DriveCmd.
 
 Working now: IDLE, LANE_FOLLOW, SAFE_STOP (straight driving).
 APPROACH, DECIDE, STOP_HOLD, TURN, CROSS and REACQUIRE raise until their
-inputs exist (intersection.py, signs.py, sign_voter.py, the IMU reader).
+inputs exist (location.py, signs.py, sign_voter.py, the IMU reader).
 choose_action is complete, ready for DECIDE.
 """
 from estimation.road_yaw import off_road_deg
@@ -118,9 +118,8 @@ class Behaviour:
         return State.IDLE
 
     def _on_lane_follow(self, front, side, lane, road_yaw, sign, imu, now):
-        inter = front.inter if front is not None else None
-        if inter is not None and inter.approach_score >= self.cfg.APPROACH_ON:
-            return State.APPROACH
+        # APPROACH is entered from LocationObs once the junction work is
+        # wired (docs/quiz3_plan.md, stage 6).
         return State.LANE_FOLLOW
 
     def _on_safe_stop(self, front, side, lane, road_yaw, sign, imu, now):
@@ -158,9 +157,9 @@ class Behaviour:
 
 
 def choose_action(sign, stop_done, cfg):
-    # Sign -> action. A STOP already served, or no sign -> DEFAULT_ACTION.
-    if sign == SignType.STOP and not stop_done:
-        return Action.STOP
+    # Sign -> action. A PAUSE already served, or no sign -> DEFAULT_ACTION.
+    if sign == SignType.PAUSE and not stop_done:
+        return Action.PAUSE
     if sign in (SignType.LEFT, SignType.RIGHT, SignType.STRAIGHT):
         return Action[sign.name]
     return Action[cfg.DEFAULT_ACTION]

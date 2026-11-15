@@ -1,0 +1,8 @@
+{
+  "camera": "front",
+  "frame_size": [
+    640,
+    480
+  ],
+  "note": "junction_3 #440-480, every 2nd frame (JPEG 95), pushed towards the junction (rocking back ~2 cm at #446-450) with the crossing line in view: dash odometry is checked against it"
+}

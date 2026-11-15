@@ -39,6 +39,15 @@ def mask_road(hsv, roi, cfg):
     return cv2.inRange(hsv, (0, 0, 0), (179, cfg.ROAD_S_MAX, v_max))
 
 
+def mask_dash(img, cfg):
+    # Our line's dashes for dash odometry: Lab b* (yellow vs blue) at least
+    # DASH_LAB_B_MIN. Pale, washed-out dashes keep a high b* when their
+    # saturation drops below YELLOW_S_MIN (junction_3: dashes b* 150-220,
+    # saturation down to 93; road b* 121-132). img: BGR.
+    b = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)[:, :, 2]
+    return cv2.inRange(b, cfg.DASH_LAB_B_MIN, 255)
+
+
 def mask_white(hsv, cfg):
     # Low saturation and brightness above WHITE_V_REL x the frame's
     # WHITE_V_PCT percentile (relative, not absolute).

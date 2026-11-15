@@ -13,17 +13,18 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import config  # noqa: E402
-from estimation.location import LocationTracker, camera_fix, zone_position  # noqa: E402
+from estimation.location import LocationTracker, camera_fix, dash_travel, zone_position  # noqa: E402
 from perception.color import make_front_masks  # noqa: E402
-from perception.location import (crossing_line_row, flare_row, process_location,  # noqa: E402
-                                 road_widening, row_to_metres)
+from perception.location import (crossing_line_row, dash_positions, flare_row,  # noqa: E402
+                                 process_location, road_widening, row_to_metres)
 from perception.pipeline import process_front_frame  # noqa: E402
 from robot_types import Frame, LocationEvidence, Zone  # noqa: E402
 
 HALF_ROAD = config.ROAD_WIDTH_M / 2
 WIDEN_START_M = -config.ZONE_BOUNDS_M[1]           # PAUSE starts where the road starts to widen
 CORNER_R = WIDEN_START_M - HALF_ROAD               # rounded corner radius
-LINE_HALF_M, DASH_M = 0.012, 0.04                   # yellow line half width; dash and gap length
+LINE_HALF_M = 0.012                                 # yellow line half width
+DASH_LEN_M, DASH_PERIOD_M = 0.045, 0.115           # MEASURED on junction_3
 ROAD, GRASS, YELLOW, FLOOR = (45, 42, 40), (50, 150, 70), (0, 215, 230), (200, 205, 210)
 
 
@@ -61,9 +62,9 @@ def junction_scene(s, lateral=0.0, yaw_deg=0.0, junction=True, seam_row=None, cf
         corner = HALF_ROAD + CORNER_R
         in_box = (np.abs(u) < corner) & (np.abs(v) < corner)
         road |= in_box & (np.hypot(np.abs(u) - corner, np.abs(v) - corner) > CORNER_R)
-    yellow = (np.abs(v) < LINE_HALF_M) & (np.mod(u, 2 * DASH_M) < DASH_M)
+    yellow = (np.abs(v) < LINE_HALF_M) & (np.mod(u, DASH_PERIOD_M) < DASH_LEN_M)
     if junction:
-        yellow |= (np.abs(u) < LINE_HALF_M) & (np.mod(v, 2 * DASH_M) < DASH_M)
+        yellow |= (np.abs(u) < LINE_HALF_M) & (np.mod(v, DASH_PERIOD_M) < DASH_LEN_M)
     img = np.empty(f.shape + (3,), np.uint8)
     img[:] = GRASS
     img[road] = ROAD
@@ -162,18 +163,67 @@ def test_front_frame_carries_location_evidence():
     assert result.location.crossing_dist_m == pytest.approx(1.2, abs=0.04)
 
 
+# ---------------------------------------------------------------- dashes
+
+def true_dashes(s, near=0.70, far=1.25):
+    # Centres (m ahead) of our dashes seen from s, inside [near, far].
+    first = math.ceil((s + near - DASH_LEN_M / 2) / DASH_PERIOD_M)
+    out = [k * DASH_PERIOD_M + DASH_LEN_M / 2 - s for k in range(first, first + 20)]
+    return tuple(d for d in out if near <= d <= far)
+
+
+@pytest.mark.parametrize("s", [-1.6, -1.0, -0.4, 0.0, 0.3])
+def test_dash_centres_on_the_synthetic_line(s):
+    # Through the junction too: the crossing line's dashes are not ours.
+    found = process_front_frame(Frame(junction_scene(s), 0.0, 1, "front"), False,
+                                config).location.dash_dists_m
+    expected = true_dashes(s, 0.68, 1.27)
+    assert len(found) >= len(expected) - 1 >= 3
+    for d in found:
+        assert min(abs(d - e) for e in true_dashes(s, 0.6, 1.4)) < 0.01
+
+
+def test_no_dashes_without_a_lane_line():
+    masks = make_front_masks(Frame(junction_scene(-1.0), 0.0, 1, "front"), config)
+    assert dash_positions(masks.yellow, None, config) == ()
+    assert process_location(masks, config, 0.0, 1).dash_dists_m == ()
+
+
+DASHES = (0.70, 0.815, 0.93, 1.045, 1.16)
+
+
+def moved(dashes, d):
+    return tuple(x - d for x in dashes)
+
+
+def test_dash_travel_finds_the_shift():
+    assert dash_travel(DASHES, moved(DASHES, 0.02), config) == pytest.approx(0.02)
+    assert dash_travel(DASHES, DASHES, config) == pytest.approx(0.0)
+    # the nearest dash left the view and a new one came in at the far end
+    assert dash_travel(DASHES, moved(DASHES, 0.03)[1:] + (1.245,), config) == pytest.approx(0.03)
+    noisy = [x - 0.02 + n for x, n in zip(DASHES, (0.003, -0.004, 0.002, 0.0, -0.002))]
+    assert dash_travel(DASHES, noisy, config) == pytest.approx(0.02, abs=0.004)
+
+
+def test_dash_travel_refuses_what_it_cannot_tell():
+    assert dash_travel(DASHES, (), config) is None
+    assert dash_travel(DASHES, (0.80,), config) is None                 # one dash isn't enough
+    # over half the spacing: can't be told from a step back, so never trusted
+    assert dash_travel(DASHES, moved(DASHES, 0.08), config) is None
+
+
 # ---------------------------------------------------------------- tracker
 
-def ev(cross=None, flare=None, seq=1, t=0.0):
-    return LocationEvidence(cross, flare, None, (), t, seq)
+def ev(cross=None, flare=None, seq=1, t=0.0, dashes=()):
+    return LocationEvidence(cross, flare, None, (), t, seq, tuple(dashes))
 
 
-def started(cfg, s=-1.5, t=0.0):
+def started(cfg, s=-1.5, t=0.0, dashes=()):
     # A tracker that has begun a pass at s (crossing fixes).
     tracker, seq = LocationTracker(cfg), 0
     for _ in range(cfg.LOCATION_START_FRAMES):
         seq += 1
-        obs = tracker.update(ev(cross=-s, seq=seq, t=t), 0.0, t)
+        obs = tracker.update(ev(cross=-s, seq=seq, t=t, dashes=dashes), 0.0, t)
     assert obs.dist_to_centre_m == pytest.approx(-s)
     return tracker, seq
 
@@ -209,34 +259,53 @@ def test_pass_needs_start_frames_in_a_row():
     assert obs.source == "crossing" and obs.zone == Zone.CONTINUE and obs.dist_to_centre_m == 1.2
 
 
-def test_repeated_or_stale_frames_are_not_fixes():
+def test_repeated_or_stale_frames_change_nothing():
     tracker, seq = started(config, s=-1.0)
-    obs = tracker.update(ev(cross=0.9, seq=seq, t=0.0), 0.0, 0.01)        # same frame again
+    obs = tracker.update(ev(cross=0.9, seq=seq, t=0.0), 0.3, 0.01)        # same frame again
     assert obs.dist_to_centre_m == 1.0
     old = 0.02 - config.MAX_OBS_AGE_S - 0.01
-    obs = tracker.update(ev(cross=0.9, seq=seq + 1, t=old), 0.0, 0.02)    # too old
-    assert obs.dist_to_centre_m == 1.0 and obs.source == "dead_reckoning"
+    obs = tracker.update(ev(cross=0.9, seq=seq + 1, t=old), 0.3, 0.02)    # too old
+    assert obs.dist_to_centre_m == 1.0 and obs.source == "crossing"
 
 
-def test_dead_reckoning_moves_s_with_the_speed_command():
-    cfg = cfg_with(SPEED_MPS_PER_UNIT=0.5)
-    tracker, _ = started(cfg, s=-0.8)
-    obs = tracker.update(None, 0.2, 1.0)                    # 1 s at 0.1 m/s
-    assert obs.dist_to_centre_m == pytest.approx(0.7) and obs.source == "dead_reckoning"
-    assert obs.conf == pytest.approx(1.0 - 0.1 / cfg.LOCATION_DR_CONF_M)
+def test_dashes_carry_s_on_after_the_last_fix():
+    tracker, seq = started(config, s=-0.70, dashes=DASHES)
+    dashes = DASHES
+    for i in range(1, 11):
+        dashes = moved(dashes, 0.02)
+        obs = tracker.update(ev(seq=seq + i, t=i / 30, dashes=dashes), 0.0, i / 30)
+    assert obs.dist_to_centre_m == pytest.approx(0.50) and obs.source == "dashes"
+    assert obs.conf == 1.0 and obs.zone == Zone.READ_SIGN
 
 
-def test_unmeasured_speed_holds_s():
-    tracker, _ = started(config, s=-0.8)
-    assert config.SPEED_MPS_PER_UNIT is None
-    assert tracker.update(None, 0.3, 5.0).dist_to_centre_m == pytest.approx(0.8)
+def drive(tracker, seq, t, frames, cmd, step, dashes):
+    # frames at 30 fps with the speed command cmd; dashes slide by step per
+    # frame (dashes None: none seen). Returns (obs, seq, t, dashes).
+    for _ in range(frames):
+        seq, t = seq + 1, t + 1 / 30
+        if dashes is not None:
+            dashes = moved(dashes, step)
+        obs = tracker.update(ev(seq=seq, t=t, dashes=dashes or ()), cmd, t)
+    return obs, seq, t, dashes
 
 
-def test_camera_fix_is_moved_on_by_its_age():
-    cfg = cfg_with(SPEED_MPS_PER_UNIT=1.0)
-    tracker, seq = started(cfg, s=-1.5)
-    obs = tracker.update(ev(cross=1.2, seq=seq + 1, t=0.9), 0.1, 1.0)     # 0.1 s old at 0.1 m/s
-    assert obs.dist_to_centre_m == pytest.approx(1.19)
+def test_learned_speed_covers_frames_without_dashes():
+    tracker, seq = started(config, s=-0.70, dashes=DASHES)
+    assert tracker.learned_speed() is None
+    obs, seq, t, _ = drive(tracker, seq, 0.0, 30, 0.25, 0.004, DASHES)    # 0.12 m/s at 0.25
+    assert tracker.learned_speed() == pytest.approx(0.48)
+    assert obs.dist_to_centre_m == pytest.approx(0.58)
+    obs, seq, t, _ = drive(tracker, seq, t, 15, 0.25, 0.0, None)          # dashes lost for 0.5 s
+    assert obs.dist_to_centre_m == pytest.approx(0.52) and obs.source == "speed"
+    assert obs.conf == pytest.approx(1.0 - 0.06 / config.LOCATION_DR_CONF_M)
+
+
+def test_stopped_frames_dont_teach_the_speed_and_nothing_known_holds():
+    tracker, seq = started(config, s=-0.70, dashes=DASHES)
+    obs, seq, t, _ = drive(tracker, seq, 0.0, 30, 0.0, 0.0, DASHES)        # a judging pause
+    assert tracker.learned_speed() is None and obs.source == "dashes"
+    obs, seq, t, _ = drive(tracker, seq, t, 10, 0.3, 0.0, None)            # driven, no dashes
+    assert obs.dist_to_centre_m == pytest.approx(0.70) and obs.source == "held"
 
 
 def test_zones_never_step_back_in_a_pass():
@@ -249,23 +318,23 @@ def test_zones_never_step_back_in_a_pass():
     assert obs.zone == Zone.PAUSE and obs.dist_to_centre_m == 0.35
 
 
-def test_a_full_pass_reports_every_zone_in_order_then_waits():
-    cfg = cfg_with(SPEED_MPS_PER_UNIT=0.5)
-    tracker, seq = started(cfg, s=-1.6)
+def test_a_pushed_pass_reports_every_zone_in_order_then_waits():
+    # No speed command at all (pushed): the crossing line, then the dashes.
+    s_true = -1.25
+    tracker, seq = started(config, s=s_true, dashes=true_dashes(s_true))
     zones, t = [], 0.0
-    while t < 40.0:
-        t += 1 / 30
-        s_true = -1.6 + 0.1 * t
-        seq += 1
-        fix = ev(cross=-s_true, seq=seq, t=t) if -s_true >= 0.71 else ev(seq=seq, t=t)
-        obs = tracker.update(fix, 0.2, t)
+    while s_true < 2.0:
+        s_true, t, seq = s_true + 0.004, t + 1 / 30, seq + 1
+        cross = -s_true if -s_true >= 0.66 else None
+        obs = tracker.update(ev(cross=cross, seq=seq, t=t, dashes=true_dashes(s_true)), 0.0, t)
         if not zones or obs.zone != zones[-1]:
             zones.append(obs.zone)
         if obs.dist_to_centre_m is None:
             break
+        assert obs.dist_to_centre_m == pytest.approx(-s_true, abs=0.005)
     assert zones == [Zone.CONTINUE, Zone.READ_SIGN, Zone.PAUSE, Zone.ENTERING, Zone.TURN,
                      Zone.EXITING, Zone.CONTINUE]
-    assert -1.6 + 0.1 * t == pytest.approx(cfg.LOCATION_PASS_END_M, abs=0.01)
+    assert s_true == pytest.approx(config.LOCATION_PASS_END_M, abs=0.005)
     assert tracker.get().source == "none"
 
 
@@ -281,19 +350,20 @@ def test_ready_flags_follow_the_zone():
 
 
 def test_synthetic_push_through_the_junction_with_the_camera_alone():
-    # Frames every 2 cm from 2 m before the centre: the tracker starts a
-    # pass from the camera and is within 4 cm of the truth while a cue is
-    # seen. The crossing line leaves the view (0.66 m) just inside READ_SIGN
-    # (0.73 m): every later zone is placed by dead reckoning.
-    tracker, errors = LocationTracker(config), []
-    for i, s in enumerate(np.arange(-2.0, -0.715, 0.02)):
+    # Frames every 2 cm from 2 m before the centre to 0.4 m past it, no
+    # speed command: the crossing line, then our own dashes, keep s within
+    # 3 cm of the truth through every zone.
+    tracker, zones, errors = LocationTracker(config), [], []
+    for i, s in enumerate(np.arange(-2.0, 0.4, 0.02)):
         result = process_front_frame(Frame(junction_scene(s), i * 0.1, i + 1, "front"), False, config)
         obs = tracker.update(result.location, 0.0, i * 0.1)
-        if obs.source == "crossing":
+        if obs.dist_to_centre_m is not None:
             errors.append(obs.dist_to_centre_m + s)
-    assert len(errors) > 20
-    assert max(abs(e) for e in errors) < 0.04
-    assert tracker.get().zone == Zone.READ_SIGN          # the line is seen to 0.66 m
+        if not zones or obs.zone != zones[-1]:
+            zones.append(obs.zone)
+    assert zones == [Zone.CONTINUE, Zone.READ_SIGN, Zone.PAUSE, Zone.ENTERING, Zone.TURN,
+                     Zone.EXITING, Zone.CONTINUE]
+    assert len(errors) > 80 and max(abs(e) for e in errors) < 0.03
 
 
 # ---------------------------------------------------------------- replay
@@ -367,3 +437,25 @@ def test_tracker_ignores_a_fix_behind_the_robot():
     assert obs.dist_to_centre_m == pytest.approx(0.85)
     obs = tracker.update(ev(cross=0.90, seq=seq + 2), 0.0, 0.0)     # within LOCATION_BACK_MAX_M
     assert obs.dist_to_centre_m == pytest.approx(0.90)
+
+
+SEQ_REC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "junction_seq")
+
+
+def test_real_dash_odometry_matches_the_crossing_line():
+    # junction_3 pushed towards the junction, rocking back ~2 cm on the way:
+    # summed dash travel against how far the crossing line came closer.
+    from perception.front_lane import LaneTracker
+    from tools.recording import iter_frames
+    lane, frames = LaneTracker(), []
+    for f in iter_frames(SEQ_REC):
+        frames.append(process_front_frame(f, False, config, lane).location)
+    steps = [dash_travel(a.dash_dists_m, b.dash_dists_m, config) for a, b in zip(frames, frames[1:])]
+    assert None not in steps and min(steps) < -0.005                   # the rock back is seen
+    closer = frames[0].crossing_dist_m - frames[-1].crossing_dist_m
+    assert closer > 0.15
+    assert sum(steps) == pytest.approx(closer, abs=0.015)
+    # Every frame has several marks to match. Where the crossing line meets
+    # ours the runs differ from single dashes, but they are painted on the
+    # ground too, so they slide by the same amount.
+    assert all(len(f.dash_dists_m) >= 4 for f in frames)

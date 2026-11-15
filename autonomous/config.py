@@ -169,6 +169,19 @@ FLARE_MIN_M = 0.10              # m; road this much wider than at the bottom of 
 FLARE_WIDE_STRIPS = 3           # widened strips in a row needed (a mat seam is one strip)
 FLARE_NORMAL_STRIPS = 3         # strips at the bottom of the view whose median width is the normal road
 FLARE_BASE_MAX_M = 0.09         # m; the bottom of the view must be at most this much wider than ROAD_WIDTH_M (straights: +0.02-0.06; inside a corner: more)
+# Dash odometry (docs/quiz3_plan.md): how far the robot moved between two
+# frames, from how far our own line's dashes slid towards it. MEASURED on
+# junction_3: dash centres 0.115 m apart (dash ~0.045 m, gap ~0.07 m).
+DASH_LAB_B_MIN = 145            # Lab b* (128 = neutral) a dash pixel needs; MEASURED on junction_1-3 (dashes 150-220, road 121-132)
+DASH_WINDOW_M = 0.02            # m; yellow this close to the fitted lane line counts as our dash
+DASH_GAP_ROWS = 1               # rows; breaks this short inside a dash are bridged (far dashes fragment)
+DASH_LEN_MIN_M = 0.015          # m; shorter runs are specks
+DASH_LEN_MAX_M = 0.08           # m; longer runs are not one dash
+DASH_MAX_STEP_M = 0.05          # m; most a frame-to-frame move can be (under half the 0.115 m spacing)
+DASH_MAX_BACK_M = 0.01          # m; a match this far backwards is still taken as noise around 0
+DASH_MATCH_TOL_M = 0.012        # m; a dash matches when it moved within this of the shift
+DASH_MIN_MATCHES = 2            # dashes that must agree on the shift
+DASH_COLOUR = (60, 255, 120)    # BGR annotation colour of a dash centre
 CROSS_LINE_COLOUR = (0, 215, 255)   # BGR annotation colours: crossing line,
 FLARE_COLOUR = (230, 120, 255)      # where the road starts to widen
 STOP_LINE_Y_FRAC = 0.85         # fraction of height
@@ -236,7 +249,9 @@ ZONE_PAUSE_S = 2.0              # s stopped at each zone change, for the judge
 QUIZ_EXIT_M = 0.4               # m past the centre at which QUIZ_INTERSECTION goes back to IDLE
 LOCATION_START_FRAMES = 3       # frames in a row with a camera fix before a junction pass begins
 LOCATION_PASS_END_M = 1.0       # m; s at which a pass ends and the tracker waits for the next junction (>= QUIZ_EXIT_M)
-LOCATION_DR_CONF_M = 0.5        # m dead-reckoned since the last camera fix at which LocationObs.conf reaches 0
+LOCATION_DR_CONF_M = 0.5        # m travelled (dashes or learned speed) since the last camera fix at which LocationObs.conf reaches 0
+LOCATION_SPEED_FRAMES = 30      # frames of dash travel the learned speed (m/s per unit of speed command) is taken over
+LOCATION_SPEED_MIN_CMD = 0.05   # speed command below which a frame doesn't teach the speed (stopped, judging pause)
 LOCATION_BACK_MAX_M = 0.1       # m; a camera fix putting s further back than this in a pass is ignored (the robot only goes forward)
 START_MODE = "DRIVE"            # name of a RunMode member
 SIDE_BOX = None                 # MEASURED: (x, y, w, h) in SIDE_SIZE px whose surface is classified

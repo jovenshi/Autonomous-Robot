@@ -57,7 +57,7 @@ def process_front_frame(frame, signs_enabled, cfg, tracker=None, sign_model=None
     return FrontResult(
         view=masks.bgr,              # shared with the display; draw on a copy
         lane=lane,
-        location=process_location(masks, cfg, frame.t, frame.seq),
+        location=process_location(masks, cfg, frame.t, frame.seq, lane.line_px),
         sign=sign,
         mean_v=masks.mean_v,
         t=frame.t,

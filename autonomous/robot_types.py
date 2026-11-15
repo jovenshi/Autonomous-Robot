@@ -165,6 +165,7 @@ class LocationEvidence:
     annotations: tuple[Annotation, ...]
     t: float
     seq: int
+    dash_dists_m: tuple[float, ...] = ()   # centres of our own line's dashes, nearest first
 
 
 @dataclass(frozen=True)
@@ -256,7 +257,7 @@ class LocationObs:
     turn_point_ready: bool             # reached the TURN zone
     dist_to_centre_m: Optional[float]  # rear axle to the junction centre; + = still ahead
     conf: float                        # 0-1
-    source: str                        # 'crossing', 'flare', 'side', 'dead_reckoning' or 'none'
+    source: str                        # 'crossing', 'flare', 'side', 'dashes', 'speed' or 'none'
     t: float
 
 

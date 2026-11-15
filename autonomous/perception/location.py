@@ -26,6 +26,15 @@ Two cues, each turned into metres ahead of the rear axle:
     flare at or beyond the crossing line seen in the same frame is dropped:
     inside the junction the far corners can read as one (junction_3).
 
+It also reports where our own line's dashes are (dash_positions): from how
+far they slide between frames, estimation/location.py measures how far the
+robot moved once the junction's cues are out of view. The search follows
+the lane's fitted line, row by row, so specks beside it are not taken for
+ours. Where the crossing line meets ours a run can differ from one dash;
+it is painted on the ground too, so it slides by the same amount. Dash
+pixels are found by Lab b* (color.mask_dash), not the lane's yellow test:
+washed-out dashes lose saturation but stay yellow.
+
 Image rows become metres by interpolating between the band centres of
 FRONT_BANDS; rows outside them give None (no extrapolation). The front
 camera sees the ground 0.71 m to 1.66 m ahead, so each cue is only seen in
@@ -34,7 +43,7 @@ part of the approach; estimation/location.py carries s between fixes.
 import cv2
 import numpy as np
 
-from perception.color import front_lane_roi
+from perception.color import front_lane_roi, mask_dash
 from perception.front_lane import road_span
 from robot_types import Annotation, AnnotationKind, LocationEvidence
 
@@ -125,9 +134,43 @@ def flare_row(widening, cfg):
     return None
 
 
-def process_location(masks, cfg, t, seq):
+def dash_positions(dash_mask, line_px, cfg):
+    # Centres (m ahead of the rear axle, nearest first) of our line's dashes:
+    # runs of rows with dash colour (color.mask_dash) within DASH_WINDOW_M
+    # of the fitted line
+    # (line_px: its two ends, lane px), breaks of DASH_GAP_ROWS bridged,
+    # DASH_LEN_MIN_M to DASH_LEN_MAX_M long. A run cut off by the top or
+    # bottom of the view is left out (its centre would be wrong). () with no
+    # line.
+    if line_px is None:
+        return ()
+    rows, forward, m_per_px = _band_table(cfg)
+    ys = np.arange(int(np.ceil(rows[0])), int(rows[-1]) + 1)
+    (x0, y0), (x1, y1) = line_px
+    xs = x0 + (ys - y0) * (x1 - x0) / (y1 - y0)
+    half = cfg.DASH_WINDOW_M / np.interp(ys, rows, m_per_px)
+    width = dash_mask.shape[1]
+    present = np.zeros(len(ys), bool)
+    for i, (y, x, h) in enumerate(zip(ys, xs, half)):
+        lo, hi = max(0, int(round(x - h))), min(width, int(round(x + h)) + 1)
+        present[i] = lo < hi and dash_mask[y, lo:hi].any()
+    gap = np.ones(2 * cfg.DASH_GAP_ROWS + 1, np.uint8)
+    present = cv2.morphologyEx(present.astype(np.uint8)[:, None], cv2.MORPH_CLOSE, gap[:, None])[:, 0] > 0
+    out = []
+    for start, end in _runs(present):
+        if start == 0 or end == len(ys) - 1:
+            continue
+        far, near = np.interp(ys[start], rows, forward), np.interp(ys[end], rows, forward)
+        if cfg.DASH_LEN_MIN_M <= far - near <= cfg.DASH_LEN_MAX_M:
+            out.append(float((far + near) / 2))
+    return tuple(sorted(out))
+
+
+def process_location(masks, cfg, t, seq, line_px=None):
     # FrontMasks -> LocationEvidence, with a line and a label for each cue
-    # seen. side_surface stays None until the side camera's box (stage 8).
+    # seen and a point on each of our dashes. line_px: the lane's fitted
+    # line (FrontLaneObs.line_px), or None (no dashes). side_surface stays
+    # None until the side camera's box (stage 8).
     cross_row = crossing_line_row(masks.yellow, masks.road, cfg)
     flare = flare_row(road_widening(masks.road, masks.yellow, cfg), cfg)
     cross_m, flare_m = row_to_metres(cross_row, cfg), row_to_metres(flare, cfg)
@@ -136,8 +179,24 @@ def process_location(masks, cfg, t, seq):
     width = masks.yellow.shape[1]
     notes = _cue_notes(cross_row, cross_m, "cross", cfg.CROSS_LINE_COLOUR, width)
     notes += _cue_notes(flare, flare_m, "flare", cfg.FLARE_COLOUR, width)
+    dashes = dash_positions(mask_dash(masks.bgr, cfg), line_px, cfg) if line_px is not None else ()
+    notes += _dash_notes(dashes, line_px, cfg)
     return LocationEvidence(crossing_dist_m=cross_m, flare_dist_m=flare_m, side_surface=None,
-                            annotations=tuple(notes), t=t, seq=seq)
+                            annotations=tuple(notes), t=t, seq=seq, dash_dists_m=dashes)
+
+
+def _dash_notes(dashes, line_px, cfg):
+    # A point on the lane line at each dash centre.
+    if not dashes:
+        return []
+    rows, forward, _ = _band_table(cfg)
+    (x0, y0), (x1, y1) = line_px
+    notes = []
+    for d in dashes:
+        y = float(np.interp(d, forward[::-1], rows[::-1]))
+        notes.append(Annotation(AnnotationKind.POINT, ((x0 + (y - y0) * (x1 - x0) / (y1 - y0), y),),
+                                "", cfg.DASH_COLOUR))
+    return notes
 
 
 def _cue_notes(row, dist_m, name, colour, width):

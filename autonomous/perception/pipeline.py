@@ -1,14 +1,15 @@
 """Camera thread entry points: one call per frame, one result object out.
 
 process_side_frame is added with perception/side_lane.py. Location evidence
-and signs are read here for now (docs/quiz3_plan.md: they move to the vision
-worker in stage 7).
+and signs (process_vision) are read in the front camera thread, or, with
+VISION_WORKER_ENABLED, in the vision worker process (perception/worker.py),
+which calls the same process_vision on the frames the camera thread shares.
 """
 from perception.color import make_front_masks
 from perception.front_lane import process_front_lane
 from perception.location import process_location
 from perception.signs import process_signs
-from robot_types import FrontResult
+from robot_types import FrontResult, VisionResult
 
 
 class SignPacer:
@@ -45,20 +46,36 @@ def _read_sign(frame, masks, signs_enabled, sign_model, pacer, cfg):
     return pacer.latest
 
 
-def process_front_frame(frame, signs_enabled, cfg, tracker=None, sign_model=None, pacer=None):
-    # Front thread entry: masks once, then lane, location evidence and
-    # (when signs_enabled, at SIGN_HZ) the sign reader.
+def process_vision(frame, line_px, signs_enabled, cfg, sign_model=None, pacer=None, masks=None):
+    # Location evidence and (when signs_enabled, at SIGN_HZ) the sign
+    # reading for one frame -> VisionResult. line_px: the lane's fitted line
+    # (for the dashes), or None. masks: the frame's FrontMasks if already
+    # made (camera thread); the worker makes its own.
+    if masks is None:
+        masks = make_front_masks(frame, cfg, with_signs=False)
+    return VisionResult(
+        location=process_location(masks, cfg, frame.t, frame.seq, line_px),
+        sign=_read_sign(frame, masks, signs_enabled, sign_model, pacer, cfg),
+        t=frame.t, seq=frame.seq)
+
+
+def process_front_frame(frame, signs_enabled, cfg, tracker=None, sign_model=None, pacer=None,
+                        with_vision=True):
+    # Front thread entry: masks once, then lane, then (with_vision) location
+    # evidence and the sign reader. with_vision False when the vision
+    # worker does that work: location and sign are then None.
     # tracker: the camera thread's LaneTracker (search window), or None.
     # sign_model: SignModel, or None to report candidates only.
     # pacer: the camera thread's SignPacer, or None to read every frame.
     masks = make_front_masks(frame, cfg, with_signs=False)
     lane = process_front_lane(masks, cfg, frame.t, frame.seq, tracker)
-    sign = _read_sign(frame, masks, signs_enabled, sign_model, pacer, cfg)
+    vision = (process_vision(frame, lane.line_px, signs_enabled, cfg, sign_model, pacer, masks)
+              if with_vision else None)
     return FrontResult(
         view=masks.bgr,              # shared with the display; draw on a copy
         lane=lane,
-        location=process_location(masks, cfg, frame.t, frame.seq, lane.line_px),
-        sign=sign,
+        location=vision.location if vision is not None else None,
+        sign=vision.sign if vision is not None else None,
         mean_v=masks.mean_v,
         t=frame.t,
         seq=frame.seq,

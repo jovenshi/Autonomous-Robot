@@ -254,6 +254,8 @@ START_MODE = "DRIVE"            # name of a RunMode member
 SIDE_BOX = None                 # MEASURED: (x, y, w, h) in SIDE_SIZE px whose surface is classified
 VISION_WORKER_ENABLED = False   # False = location and sign work stay in the front camera thread
 VISION_STALE_S = 0.5            # s; newest VisionResult older than this -> VISION_STALE
+VISION_WAIT_S = 0.2             # s; the worker checks for a stop this often while no frame arrives
+VISION_STOP_TIMEOUT_S = 1.0     # s; shutdown waits this long for the worker before terminating it
 
 # ---------------------------------------------------------------- speeds and lane control
 

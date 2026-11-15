@@ -2,6 +2,9 @@
 
 Front camera, IMU, lane fusion, road yaw, lane controller, sign voter,
 junction location (LocationTracker), behaviour, display and the Sabertooth.
+Location evidence and signs come from the front camera thread, or with
+VISION_WORKER_ENABLED from the vision worker process (perception/worker.py),
+which reads the frames the camera thread shares (hal/shared_frame.py).
 Modes: DRIVE (straight driving), QUIZ_INTERSECTION (drive through the
 junction reporting each zone, docs/quiz3_plan.md stage 6), QUIZ_SIGNS.
 
@@ -13,12 +16,14 @@ Run from the robot/ folder:  python main.py
 
 Test on a stand with the wheels off the ground before the first real run.
 """
+import math
+import multiprocessing
 import os
 import queue
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import config
 from behavior.sign_voter import SignVoter
@@ -34,11 +39,13 @@ from hal.camera import CameraStream, CsiSource
 from hal.exposure import ExposureControl
 from hal.imu import ImuReader
 from hal.sabertooth import SabertoothDriver
+from hal.shared_frame import SharedFrame
 from loop_log import LoopLog
 from perception.front_lane import LaneTracker
 from perception.pipeline import SignPacer, process_front_frame
 from perception.signs import load_sign_model
-from robot_types import LatestValue, State, UiCommand
+from perception.worker import start_worker, stop_worker, take_result
+from robot_types import LatestValue, State, UiCommand, VisionResult
 from tools.calib_status import startup_line
 from ui.link import make_ui_packet, read_commands, send, start_ui, stop_ui
 
@@ -60,6 +67,10 @@ class System:
     commands: queue.Queue
     voter: object = None                  # SignVoter; None in tests without one
     locator: object = None                # LocationTracker; None in tests without one
+    shared_frame: object = None           # SharedFrame and Worker with VISION_WORKER_ENABLED;
+    worker: object = None                 # None for the in-thread path
+    vision: object = None                 # newest VisionResult from the worker
+    worker_start_t: float = 0.0           # for VISION_STALE before the first result
     imu: object = None                    # ImuReader; None in tests without one
     imu_slot: LatestValue = field(default_factory=LatestValue)
     loop_log: object = None               # LoopLog, or None when LOOP_LOG_ENABLED is off
@@ -84,13 +95,21 @@ def build_system(cfg):
         raise SystemExit("FRONT_BANDS is not set in config.py: run python -m tools.calib_ui first")
     signs_enabled, exposure_hold = threading.Event(), threading.Event()
     exposure_hold.set()                               # robot starts in IDLE
+    shared, worker = None, None
+    if cfg.VISION_WORKER_ENABLED:
+        # The worker reads signs_enabled too, so it must be a process Event.
+        ctx = multiprocessing.get_context("spawn")
+        signs_enabled = ctx.Event()
+        shared = SharedFrame.create(cfg.FRONT_SIZE, ctx)
+        worker = start_worker(shared, signs_enabled, cfg)
     drift_request = threading.Event()
     imu_slot = LatestValue()
     imu = ImuReader(imu_slot, drift_request, cfg)
     imu.start()
     ui = start_ui(cfg) if cfg.UI_ENABLED else (None, None, None)
     front_slot = LatestValue()
-    front_cam, front_exposure = _build_front_camera(cfg, front_slot, signs_enabled, exposure_hold)
+    front_cam, front_exposure = _build_front_camera(cfg, front_slot, signs_enabled, exposure_hold,
+                                                    shared)
 
     saber = SabertoothDriver(cfg.SABER_PORT, cfg.SABER_BAUD, cfg.SABER_ADDRESS, cfg)
     saber.open()
@@ -108,6 +127,7 @@ def build_system(cfg):
         imu=imu, imu_slot=imu_slot,
         loop_log=_open_loop_log(cfg),
         ui_process=ui[0], ui_packet_q=ui[1], ui_cmd_q=ui[2],
+        shared_frame=shared, worker=worker, worker_start_t=time.monotonic(),
     )
 
 
@@ -119,16 +139,23 @@ def _open_loop_log(cfg):
     return log
 
 
-def _build_front_camera(cfg, slot, signs_enabled, exposure_hold):
-    # Starts the front camera thread and locks exposure after warm-up.
+def _build_front_camera(cfg, slot, signs_enabled, exposure_hold, shared=None):
+    # Starts the front camera thread and locks exposure after warm-up. With
+    # shared (a SharedFrame: the vision worker is on) the thread measures
+    # the lane and shares the frame; otherwise it reads location and signs too.
     source = CsiSource(cfg.FRONT_CAM_NUM, cfg.FRONT_SIZE, cfg)
     exposure = ExposureControl(source, "front", cfg)
     tracker = LaneTracker()                          # search window, camera thread only
-    sign_model, pacer = _open_sign_model(cfg), SignPacer()
+    sign_model = _open_sign_model(cfg) if shared is None else None
+    pacer = SignPacer()
 
     def process(frame):
-        result = process_front_frame(frame, signs_enabled.is_set(), cfg, tracker,
-                                     sign_model, pacer)
+        if shared is None:
+            result = process_front_frame(frame, signs_enabled.is_set(), cfg, tracker,
+                                         sign_model, pacer)
+        else:
+            result = process_front_frame(frame, False, cfg, tracker, with_vision=False)
+            shared.publish(frame, result.lane.line_px)
         exposure.manage_step(result.mean_v, exposure_hold.is_set())
         return result
 
@@ -184,15 +211,16 @@ def control_step(sys, now):
     if sys.ui_cmd_q is not None:
         commands += read_commands(sys.ui_cmd_q)      # taps, merged with the keyboard
 
+    vision = _vision(sys, front)
     fps, overruns = {"front": sys.front_cam.fps()}, _recent_overruns(sys, now)
     warnings = check_health(front, None, imu_raw, lane, road_yaw, fps,
-                            overruns, sys.saber.serial_error, now, cfg)
-    vote = _sign_vote(sys, front, now)
-    location = _location(sys, front, now)
+                            overruns, sys.saber.serial_error, now, cfg, _vision_age(sys, now))
+    vote = _sign_vote(sys, vision, now)
+    location = _location(sys, vision, now)
     state = sys.behaviour.step(front, None, lane, road_yaw, vote, imu_raw, commands,
                                sys.saber.serial_error, now, location)
     if not sys.signs_enabled.is_set():
-        vote = _sign_vote(sys, front, now)           # sign reading went off this loop: clear
+        vote = _sign_vote(sys, vision, now)          # sign reading went off this loop: clear
     if state in _LANE_STATES and state != sys.prev_state:
         sys.lane_ctrl.reset()
     if sys.prev_state == State.IDLE and state != State.IDLE and sys.locator is not None:
@@ -209,13 +237,47 @@ def control_step(sys, now):
         include_views = sys.ui_loops % cfg.UI_IMAGE_EVERY == 0
         sys.ui_loops += 1
         send(sys.ui_packet_q, make_ui_packet(sys, now, drive, motor, lane, road_yaw, imu_raw,
-                                             vote, fps, overruns, warnings, front, None,
+                                             vote, fps, overruns, warnings,
+                                             _front_for_ui(sys, front, vision), None,
                                              include_views, quiz_location))
     _report(sys, state, lane, imu, road_yaw, warnings, now, vote, quiz_location)
     sys.prev_state = state
 
 
-def _sign_vote(sys, front, now):
+def _vision(sys, front):
+    # The newest VisionResult: from the worker (kept until a newer one
+    # arrives), or from the front camera thread's own result.
+    if sys.worker is None:
+        if front is None:
+            return None
+        return VisionResult(front.location, front.sign, front.t, front.seq)
+    newest = take_result(sys.worker)
+    if newest is not None:
+        sys.vision = newest
+    return sys.vision
+
+
+def _vision_age(sys, now):
+    # Seconds since the newest worker result's frame (inf once the worker
+    # has died), or None without a worker. Only a warning (VISION_STALE):
+    # the control loop carries on.
+    if sys.worker is None:
+        return None
+    if not sys.worker.process.is_alive():
+        return math.inf
+    return now - (sys.vision.t if sys.vision is not None else sys.worker_start_t)
+
+
+def _front_for_ui(sys, front, vision):
+    # The front result for the display, carrying the worker's location and
+    # sign so the camera view draws them as with the in-thread path.
+    if sys.worker is None or front is None:
+        return front
+    return replace(front, location=vision.location if vision is not None else None,
+                   sign=vision.sign if vision is not None else None)
+
+
+def _sign_vote(sys, vision, now):
     # Feeds the newest fresh sign reading to the voter -> SignVote or None.
     # With sign reading off the voter is cleared, so an old sign never
     # lingers into the next time it is switched on.
@@ -224,18 +286,18 @@ def _sign_vote(sys, front, now):
     if not sys.signs_enabled.is_set():
         sys.voter.reset()
         return None
-    if front is not None and front.sign is not None and is_fresh(front.sign, now, sys.cfg):
-        sys.voter.add(front.sign)
+    if vision is not None and vision.sign is not None and is_fresh(vision.sign, now, sys.cfg):
+        sys.voter.add(vision.sign)
     return sys.voter.decided()
 
 
-def _location(sys, front, now):
-    # The newest LocationObs from the front camera's evidence, moved on by
-    # last loop's speed command where the dashes can't be matched; None
-    # without a tracker.
+def _location(sys, vision, now):
+    # The newest LocationObs from the camera's evidence, moved on by last
+    # loop's speed command where the dashes can't be matched; None without
+    # a tracker.
     if sys.locator is None:
         return None
-    evidence = front.location if front is not None else None
+    evidence = vision.location if vision is not None else None
     speed = sys.last_drive.speed if sys.last_drive is not None else 0.0
     return sys.locator.update(evidence, speed, now)
 
@@ -334,7 +396,8 @@ def run(sys):
 def shutdown(sys):
     # Motors first, then everything else; each step runs even if one fails.
     # The loop log is flushed before the camera, whose stop can hang when the
-    # camera has failed, so the log of a bad run is never lost.
+    # camera has failed, so the log of a bad run is never lost. The shared
+    # frame is freed last, once neither the worker nor the camera uses it.
     steps = [sys.saber.stop, sys.saber.close]
     if sys.imu is not None:
         steps.append(sys.imu.close)
@@ -344,7 +407,13 @@ def shutdown(sys):
         def stop_display():
             stop_ui(sys.ui_process, sys.cfg)
         steps.append(stop_display)
+    if sys.worker is not None:
+        def stop_vision():
+            stop_worker(sys.worker, sys.cfg)
+        steps.append(stop_vision)
     steps.append(sys.front_cam.stop)
+    if sys.shared_frame is not None:
+        steps.append(sys.shared_frame.close)        # after the camera: it writes there
     for step in steps:
         try:
             step()

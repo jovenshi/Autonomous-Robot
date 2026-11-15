@@ -49,8 +49,13 @@ def _road_yaw_stale(road_yaw, now, cfg):
     return not road_yaw.valid or now - road_yaw.t_anchor > cfg.ROAD_YAW_STALE_S
 
 
+def fps_min(name, cfg):
+    # The lowest acceptable frame rate for a camera ('front' or 'side').
+    return cfg.SIDE_CAM_FPS_MIN if name == "side" else cfg.CAM_FPS_MIN
+
+
 def _cam_fps_low(fps, cfg):
-    return any(rate < cfg.CAM_FPS_MIN for rate in fps.values())
+    return any(rate < fps_min(name, cfg) for name, rate in fps.items())
 
 
 def _brightness(front, side):

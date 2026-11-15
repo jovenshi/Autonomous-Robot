@@ -180,7 +180,7 @@ class UsbSource:
         self._lock = threading.Lock()
 
     def open(self):
-        # Opens by path; sets YUYV, size, fps and a one-frame buffer.
+        # Opens by path; sets the pixel format (SIDE_CAM_FOURCC), size, fps and a one-frame buffer.
         if self.device_path is None:
             raise ValueError("SIDE_CAM_DEVICE is not set in config.py")
         cap = cv2.VideoCapture(self.device_path, cv2.CAP_V4L2)

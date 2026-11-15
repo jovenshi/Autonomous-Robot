@@ -213,10 +213,12 @@ class SideLaneObs:
 @dataclass(frozen=True)
 class SideResult:
     view: np.ndarray                   # 320 x 240 image for the display
-    side: SideLaneObs
+    side: Optional[SideLaneObs]        # None: side lane measurement is not built (out of scope)
     mean_v: float
     t: float
     seq: int
+    surface: Optional[Surface] = None  # in SIDE_BOX; None when mixed
+    annotations: tuple[Annotation, ...] = ()
 
 
 # ---------------------------------------------------------------- IMU

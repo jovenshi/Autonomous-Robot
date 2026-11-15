@@ -24,7 +24,7 @@ LANE_LOST_TIMEOUT_S = 0.5       # s
 
 FRONT_CAM_NUM = 0
 SIDE_CAM_DEVICE = "/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._Webcam_Webcam-video-index0"
-SIDE_CAM_FOURCC = "YUYV"
+SIDE_CAM_FOURCC = "MJPG"         # MEASURED 2026-11-15: this webcam gives YUYV at 3 fps (though it lists 30), MJPG at 19 fps
 FRONT_SIZE = (640, 480)
 FRONT_LANE_SIZE = (320, 240)
 SIDE_SIZE = (320, 240)
@@ -266,7 +266,32 @@ LOCATION_SPEED_FRAMES = 30      # frames of dash travel the learned speed (m/s p
 LOCATION_SPEED_MIN_CMD = 0.05   # speed command below which a frame doesn't teach the speed (stopped, judging pause)
 LOCATION_BACK_MAX_M = 0.1       # m; a camera fix putting s further back than this in a pass is ignored (the robot only goes forward)
 START_MODE = "DRIVE"            # name of a RunMode member
-SIDE_BOX = None                 # MEASURED: (x, y, w, h) in SIDE_SIZE px whose surface is classified
+# Side camera surface box (docs/quiz3_plan.md, stage 8), MEASURED 2026-11-15 on
+# junction_side_1-3 (tools/side_fixes.py). The side camera looks out to the
+# right; the top of its image is the ground nearest the robot. Its colours
+# are washed out (grass: green chromaticity 0.345, saturation ~20), so the
+# box is classed by the road mask alone: ROAD, or GRASS when it isn't road.
+SIDE_CAM_ENABLED = True         # start the side camera if it opens (main.py carries on without it)
+SIDE_BOX = (220, 5, 90, 50)     # (x, y, w, h) in SIDE_SIZE px: top right, nearest the robot and least troubled by mat seams
+SIDE_ROAD_MIN_FRAC = 0.6        # road fraction of the box for ROAD
+SIDE_GRASS_MAX_FRAC = 0.2       # road fraction at or under which the box is GRASS; between: mixed (no class)
+SIDE_SURFACE_FRAMES = 2         # side frames in a row with the same class before the surface changes
+# Rear-axle s at which the box's surface becomes ROAD (the corner) and GRASS
+# again (leaving the cross road): means over junction_side_1-3, each within
+# about 4 cm (where the robot sits across the road moves them). Less precise
+# than dash odometry, so used only when the dashes have failed since the
+# last camera fix (estimation/location.py).
+SIDE_FIXES_M = {"ROAD": -0.18, "GRASS": 0.12}
+# Off: on junction_side_1-3 the fixes never improved the estimate. With a
+# learned speed the dashes-lost estimate stays within 1 cm (a side fix made
+# it 4-5 cm); when it has held still, s is too stale to gate out the false
+# ROAD changes that mat seams and shadows give before the junction.
+SIDE_FIXES_ENABLED = False
+SIDE_FIX_GATE_M = 0.12          # m; a side fix further than this from the current s is ignored (mat seams, shadows)
+SIDE_CAM_FPS_MIN = 15           # fps; the side webcam gives 19 fps in MJPG
+SIDE_ROAD_COLOUR = (90, 90, 90)     # BGR annotation colours of the box: road,
+SIDE_GRASS_COLOUR = (80, 185, 63)   # grass,
+SIDE_MIXED_COLOUR = (34, 153, 210)  # mixed
 VISION_WORKER_ENABLED = False   # False = location and sign work stay in the front camera thread
 VISION_STALE_S = 0.5            # s; newest VisionResult older than this -> VISION_STALE
 VISION_WAIT_S = 0.2             # s; the worker checks for a stop this often while no frame arrives

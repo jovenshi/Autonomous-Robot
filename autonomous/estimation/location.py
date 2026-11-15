@@ -12,7 +12,15 @@ negative before it. On each new camera frame s is set from the best source:
      from dash travel over the last LOCATION_SPEED_FRAMES frames that were
      driven (not stopped), so it follows the battery.
   otherwise s holds ('held').
-(The side camera's surface changes are added in stage 8, between 2 and 3.)
+The side camera adds two fixes (stage 8; off unless SIDE_FIXES_ENABLED): the surface in its box turning
+from GRASS to ROAD (the corner) and back to GRASS (past the cross road), at
+the s in SIDE_FIXES_M. They are less precise than dash odometry (about 4 cm
+between runs), so each is used once per pass and only when the estimate is
+'suspect': since its last camera fix some frame held still because neither
+the dashes nor a learned speed could move it. (With a learned speed, the
+estimate stays within 1 cm of the dashes' on junction_side_1-3 with the
+dashes removed from 0.4 m before the centre; a side fix made it 4-5 cm.) A side fix further than
+SIDE_FIX_GATE_M from s is ignored (a mat seam or shadow under the box).
 
 Motion is only counted when a camera frame arrives, from the frame before:
 counting it on every control loop as well would count it twice.
@@ -92,6 +100,9 @@ class LocationTracker:
         self._prev = None                # last frame's LocationEvidence
         self._cmd_s = 0.0                # speed command x s since that frame
         self._last_t = None
+        self._side_seq = None
+        self._side_surface = None        # the box's settled surface
+        self._side_run = (None, 0)       # (surface, side frames in a row with it)
         self.reset()
 
     def reset(self):
@@ -105,20 +116,50 @@ class LocationTracker:
         self._sign_at_edge = False       # the last sign box seen touched the view's edge
         self._sign_gone = 0              # sign readings in a row with no box since then
         self._sign_seq = None
+        self.suspect = False             # held without dashes or speed since the last camera fix
+        self._side_used = set()          # side fixes used this pass
         self._obs = None
 
-    def update(self, evidence, speed_cmd, now, sign=None):
+    def update(self, evidence, speed_cmd, now, sign=None, side=None):
         # evidence: the newest LocationEvidence (or None); speed_cmd: the
         # speed commanded last loop (0-1); sign: the newest SignObs (or None,
-        # also while sign reading is off). Returns the LocationObs.
+        # also while sign reading is off); side: the newest SideResult (or
+        # None without a side camera). Returns the LocationObs.
         self._note_sign(sign)
         if self._last_t is not None:
             self._cmd_s += speed_cmd * max(0.0, now - self._last_t)
         self._last_t = now
         if self._is_new_frame(evidence, now):
             self._on_frame(evidence)
+        self._apply_side_fix(self._side_change(side, now))
         self._obs = self._observation(now)
         return self._obs
+
+    def _side_change(self, side, now):
+        # The surface the side box has just settled on after another one
+        # (SIDE_SURFACE_FRAMES frames in a row), or None.
+        if not is_fresh(side, now, self.cfg) or side.seq == self._side_seq:
+            return None
+        self._side_seq = side.seq
+        if side.surface is None:
+            self._side_run = (None, 0)       # mixed: the run is broken
+            return None
+        surface, n = self._side_run
+        self._side_run = (side.surface, n + 1 if side.surface == surface else 1)
+        if self._side_run[1] < self.cfg.SIDE_SURFACE_FRAMES or side.surface == self._side_surface:
+            return None
+        previous, self._side_surface = self._side_surface, side.surface
+        return side.surface if previous is not None else None
+
+    def _apply_side_fix(self, surface):
+        # The side fix for this change, if it applies (see the docstring).
+        if not self.cfg.SIDE_FIXES_ENABLED or surface is None or self.s is None or not self.suspect:
+            return
+        fix = self.cfg.SIDE_FIXES_M.get(surface.name)
+        if fix is None or surface in self._side_used or abs(fix - self.s) > self.cfg.SIDE_FIX_GATE_M:
+            return
+        self._side_used.add(surface)
+        self.s, self.source, self.guessed_m, self.suspect = fix, "side", 0.0, False
 
     def get(self):
         return self._obs
@@ -159,10 +200,11 @@ class LocationTracker:
             return
         self.s += moved
         if fix is not None and fix[0] >= self.s - self.cfg.LOCATION_BACK_MAX_M:
-            self.s, self.source, self.guessed_m = fix[0], fix[1], 0.0
+            self.s, self.source, self.guessed_m, self.suspect = fix[0], fix[1], 0.0, False
         else:
             self.source = how
             self.guessed_m += moved if how == "speed" else 0.0
+            self.suspect = self.suspect or how == "held"
         if self.s >= self.cfg.LOCATION_PASS_END_M:
             self.reset()
 

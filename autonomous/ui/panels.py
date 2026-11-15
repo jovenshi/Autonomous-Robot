@@ -17,6 +17,7 @@ from collections import deque
 import cv2
 import numpy as np
 
+from estimation.health import fps_min
 from robot_types import HealthWarning, State
 from ui.overlay import (AMBER, BLUE, GREEN, LINE, MUTED, PANEL, PURPLE, RED, TEXT, YELLOW, cm,
                         deg)
@@ -224,7 +225,7 @@ def preflight(packet, cfg, camera=None):
     checks = [("IMU valid", imu is not None and imu.valid),
               ("gyro calibrated", imu is not None and imu.calib_gyro == 3)]
     for name, rate in sorted(packet.fps.items()):
-        checks.append((f"{name} camera {rate:.0f} fps", rate >= cfg.CAM_FPS_MIN))
+        checks.append((f"{name} camera {rate:.0f} fps", rate >= fps_min(name, cfg)))
     if not packet.fps:
         checks.append(("camera fps", False))
     checks.append(("motor serial", HealthWarning.MOTOR_SERIAL_ERROR not in packet.warnings))

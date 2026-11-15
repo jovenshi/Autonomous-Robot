@@ -180,6 +180,7 @@ class Screen:
                               packet.sign_vote if packet is not None else None, self.cfg, scale)
         else:
             draw_side_overlay(img, result, self.cfg, scale)
+            draw_annotations(img, result.annotations, scale)     # surface box and class
         age = self.clock() - result.t
         if age > self.cfg.UI_VIEW_STALE_S:
             mark_stale(img, age)

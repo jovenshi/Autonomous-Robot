@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import config  # noqa: E402
 from loop_log import COLUMNS, LoopLog
 from robot_types import (DriveCmd, ImuSample, LaneEstimate, LocationObs, RunMode,  # noqa: E402
-                         SignType, SignVote, State, Zone)
+                         SignType, SignVote, State, Surface, Zone)
 
 START = datetime.datetime(2026, 10, 11, 15, 30, 5)
 
@@ -50,7 +50,7 @@ def test_rows_hold_the_loop_values(tmp_path):
     log.close()
     _, rows = read(log.path)
     assert rows[1] == ["12.3457", "LANE_FOLLOW", "0.012", "-0.03", "0.9",
-                       "4.5", "-12.25", "1", "-0.125", "0.7", "", "", "", "", ""]
+                       "4.5", "-12.25", "1", "-0.125", "0.7", "", "", "", "", "", ""]
 
 
 def test_missing_values_are_empty_cells(tmp_path):
@@ -61,7 +61,7 @@ def test_missing_values_are_empty_cells(tmp_path):
     log.close()
     _, rows = read(log.path)
     assert rows[1] == ["1.0000", "LANE_FOLLOW", "", "", "0", "", "", "0", "0", "0.3",
-                       "", "", "", "", ""]
+                       "", "", "", "", "", ""]
     assert rows[2][7] == "0"                       # invalid sample: imu_valid 0
 
 
@@ -73,13 +73,15 @@ def test_quiz_columns(tmp_path):
     log = LoopLog(str(tmp_path), config, start=START)
     log.write(1.0, State.APPROACH, lane(), imu(), DriveCmd(0.3, 0.0), RunMode.QUIZ_INTERSECTION,
               loc, SignVote(SignType.LEFT, None, 0.5))
-    log.write(1.1, State.IDLE, lane(), imu(), DriveCmd(0.0, 0.0), RunMode.DRIVE, no_pass, None)
+    log.write(1.1, State.IDLE, lane(), imu(), DriveCmd(0.0, 0.0), RunMode.DRIVE, no_pass, None,
+              Surface.ROAD)
     log.close()
     _, rows = read(log.path)
     named = dict(zip(COLUMNS, rows[1]))
     assert (named["mode"], named["zone"], named["s"], named["loc_source"], named["sign"]) == \
         ("QUIZ_INTERSECTION", "PAUSE", "-0.25", "dashes", "LEFT")
-    assert rows[2][-5:] == ["DRIVE", "", "", "", ""]
+    assert rows[2][-6:] == ["DRIVE", "", "", "", "", "ROAD"]
+    assert named["side_surface"] == ""
 
 
 def test_rows_are_buffered_until_close(tmp_path):

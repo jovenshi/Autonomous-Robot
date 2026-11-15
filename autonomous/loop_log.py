@@ -11,7 +11,8 @@ from the fresh IMU sample (empty when missing or stale); the controller used
 yaw_rate_dps for damping only when imu_valid is 1. mode is the RunMode;
 zone, s (m from the junction centre, negative before) and loc_source come
 from the LocationObs, empty with no junction pass under way; sign is the
-voted sign.
+voted sign; side_surface is the side camera's class of SIDE_BOX (ROAD,
+GRASS, empty when mixed or no side camera).
 
 tools/weave_report.py reads these files.
 """
@@ -21,7 +22,7 @@ import os
 
 COLUMNS = ("t", "state", "lateral_err_m", "heading_err_rad", "lane_conf",
            "yaw_deg", "yaw_rate_dps", "imu_valid", "steer", "speed",
-           "mode", "zone", "s", "loc_source", "sign")
+           "mode", "zone", "s", "loc_source", "sign", "side_surface")
 GAINS = ("KD_YAW", "KP_LAT", "KH", "CRUISE_SPEED")
 
 
@@ -41,9 +42,11 @@ class LoopLog:
         self._writer = csv.writer(self._file)
         self._writer.writerow(COLUMNS)
 
-    def write(self, now, state, lane, imu, drive, mode=None, location=None, vote=None):
+    def write(self, now, state, lane, imu, drive, mode=None, location=None, vote=None,
+              side_surface=None):
         # lane: LaneEstimate; imu: fresh ImuSample or None; drive: DriveCmd;
-        # mode: RunMode; location: LocationObs or None; vote: SignVote or None.
+        # mode: RunMode; location: LocationObs or None; vote: SignVote or None;
+        # side_surface: Surface or None.
         self._writer.writerow((
             f"{now:.4f}", state.name,
             _cell(lane.lateral_err_m), _cell(lane.heading_err_rad), _cell(lane.conf),
@@ -52,6 +55,7 @@ class LoopLog:
             int(imu is not None and imu.valid),
             _cell(drive.steer), _cell(drive.speed),
             *_quiz_cells(mode, location, vote),
+            side_surface.name if side_surface is not None else "",
         ))
 
     def close(self):

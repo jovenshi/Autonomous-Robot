@@ -4,7 +4,9 @@ Front camera, IMU, lane fusion, road yaw, lane controller, sign voter,
 junction location (LocationTracker), behaviour, display and the Sabertooth.
 Location evidence and signs come from the front camera thread, or with
 VISION_WORKER_ENABLED from the vision worker process (perception/worker.py),
-which reads the frames the camera thread shares (hal/shared_frame.py).
+which reads the frames the camera thread shares (hal/shared_frame.py). The
+side camera (SIDE_CAM_ENABLED, if it opens) classes the ground in SIDE_BOX
+(perception/side_surface.py) for the location tracker, display and log.
 Modes: DRIVE (straight driving), QUIZ_INTERSECTION (drive through the
 junction reporting each zone, docs/quiz3_plan.md stage 6), QUIZ_SIGNS.
 
@@ -35,7 +37,7 @@ from estimation.health import check_health
 from estimation.lane_fusion import fuse_lane, is_fresh
 from estimation.location import LocationTracker
 from estimation.road_yaw import RoadYawTracker
-from hal.camera import CameraStream, CsiSource
+from hal.camera import CameraStream, CsiSource, UsbSource
 from hal.exposure import ExposureControl
 from hal.imu import ImuReader
 from hal.sabertooth import SabertoothDriver
@@ -43,6 +45,7 @@ from hal.shared_frame import SharedFrame
 from loop_log import LoopLog
 from perception.front_lane import LaneTracker
 from perception.pipeline import SignPacer, process_front_frame
+from perception.side_surface import process_side_frame
 from perception.signs import load_sign_model
 from perception.worker import start_worker, stop_worker, take_result
 from robot_types import LatestValue, State, UiCommand, VisionResult
@@ -71,6 +74,8 @@ class System:
     worker: object = None                 # None for the in-thread path
     vision: object = None                 # newest VisionResult from the worker
     worker_start_t: float = 0.0           # for VISION_STALE before the first result
+    side_cam: object = None               # side CameraStream, or None (off or did not open)
+    side_slot: LatestValue = field(default_factory=LatestValue)
     imu: object = None                    # ImuReader; None in tests without one
     imu_slot: LatestValue = field(default_factory=LatestValue)
     loop_log: object = None               # LoopLog, or None when LOOP_LOG_ENABLED is off
@@ -110,6 +115,8 @@ def build_system(cfg):
     front_slot = LatestValue()
     front_cam, front_exposure = _build_front_camera(cfg, front_slot, signs_enabled, exposure_hold,
                                                     shared)
+    side_slot = LatestValue()
+    side_cam = _build_side_camera(cfg, side_slot)
 
     saber = SabertoothDriver(cfg.SABER_PORT, cfg.SABER_BAUD, cfg.SABER_ADDRESS, cfg)
     saber.open()
@@ -128,6 +135,7 @@ def build_system(cfg):
         loop_log=_open_loop_log(cfg),
         ui_process=ui[0], ui_packet_q=ui[1], ui_cmd_q=ui[2],
         shared_frame=shared, worker=worker, worker_start_t=time.monotonic(),
+        side_cam=side_cam, side_slot=side_slot,
     )
 
 
@@ -163,6 +171,22 @@ def _build_front_camera(cfg, slot, signs_enabled, exposure_hold, shared=None):
     stream.start()
     exposure.lock_after_warmup()
     return stream, exposure
+
+
+def _build_side_camera(cfg, slot):
+    # Starts the side camera thread (auto-exposure: the webcam's manual
+    # settings are not confirmed yet), or returns None with a warning: the
+    # robot drives without it.
+    if not cfg.SIDE_CAM_ENABLED:
+        return None
+    source = UsbSource(cfg.SIDE_CAM_DEVICE, cfg.SIDE_SIZE, cfg.SIDE_CAM_FOURCC, cfg)
+    stream = CameraStream(source, lambda frame: process_side_frame(frame, cfg), slot, "side", cfg)
+    try:
+        stream.start()
+    except Exception as e:
+        print(f"Warning: side camera did not start ({e}); carrying on without it")
+        return None
+    return stream
 
 
 def _open_sign_model(cfg):
@@ -212,11 +236,14 @@ def control_step(sys, now):
         commands += read_commands(sys.ui_cmd_q)      # taps, merged with the keyboard
 
     vision = _vision(sys, front)
-    fps, overruns = {"front": sys.front_cam.fps()}, _recent_overruns(sys, now)
+    side = sys.side_slot.get() if sys.side_cam is not None else None
+    fps, overruns = _fps(sys), _recent_overruns(sys, now)
+    # The side camera's brightness isn't judged: its auto-exposure differs
+    # from the front camera's DARK_WARN_V / BRIGHT_WARN_V.
     warnings = check_health(front, None, imu_raw, lane, road_yaw, fps,
                             overruns, sys.saber.serial_error, now, cfg, _vision_age(sys, now))
     vote = _sign_vote(sys, vision, now)
-    location = _location(sys, vision, now)
+    location = _location(sys, vision, now, side)
     state = sys.behaviour.step(front, None, lane, road_yaw, vote, imu_raw, commands,
                                sys.saber.serial_error, now, location)
     if not sys.signs_enabled.is_set():
@@ -232,13 +259,14 @@ def control_step(sys, now):
     sys.last_drive = drive
     quiz_location = sys.behaviour.location           # None outside QUIZ_INTERSECTION
     if sys.loop_log is not None:
-        sys.loop_log.write(now, state, lane, imu, drive, sys.behaviour.mode, location, vote)
+        sys.loop_log.write(now, state, lane, imu, drive, sys.behaviour.mode, location, vote,
+                           side.surface if side is not None else None)
     if sys.ui_packet_q is not None:
         include_views = sys.ui_loops % cfg.UI_IMAGE_EVERY == 0
         sys.ui_loops += 1
         send(sys.ui_packet_q, make_ui_packet(sys, now, drive, motor, lane, road_yaw, imu_raw,
                                              vote, fps, overruns, warnings,
-                                             _front_for_ui(sys, front, vision), None,
+                                             _front_for_ui(sys, front, vision), side,
                                              include_views, quiz_location))
     _report(sys, state, lane, imu, road_yaw, warnings, now, vote, quiz_location)
     sys.prev_state = state
@@ -291,7 +319,15 @@ def _sign_vote(sys, vision, now):
     return sys.voter.decided()
 
 
-def _location(sys, vision, now):
+def _fps(sys):
+    # Frame rate of each camera running.
+    fps = {"front": sys.front_cam.fps()}
+    if sys.side_cam is not None:
+        fps["side"] = sys.side_cam.fps()
+    return fps
+
+
+def _location(sys, vision, now, side=None):
     # The newest LocationObs from the camera's evidence, moved on by last
     # loop's speed command where the dashes can't be matched; None without
     # a tracker.
@@ -300,7 +336,7 @@ def _location(sys, vision, now):
     evidence = vision.location if vision is not None else None
     speed = sys.last_drive.speed if sys.last_drive is not None else 0.0
     sign = vision.sign if vision is not None else None
-    return sys.locator.update(evidence, speed, now, sign)
+    return sys.locator.update(evidence, speed, now, sign, side)
 
 
 def _read_commands(commands):
@@ -413,6 +449,8 @@ def shutdown(sys):
             stop_worker(sys.worker, sys.cfg)
         steps.append(stop_vision)
     steps.append(sys.front_cam.stop)
+    if sys.side_cam is not None:
+        steps.append(sys.side_cam.stop)
     if sys.shared_frame is not None:
         steps.append(sys.shared_frame.close)        # after the camera: it writes there
     for step in steps:

@@ -1,8 +1,11 @@
 # Quiz 3 plan: sign reading, location zones, modes, audio
 
-**Status:** stage 8 done (side camera surface box), 2026-11-15, branch `quiz3`. The sign quiz (stage 4) and the intersection quiz (stage 6) are complete. Section 1 is the approved brief, kept word for word; section 7 lists where the build differs, including the dash odometry change approved on 2026-11-15.
-4 are the inventory taken from the code before any change. Stage 9 rewrites
-this file to match what was built.
+**Status:** built, 2026-11-15, branch `quiz3` (stages 0-8; stage 9 is this
+rewrite). The sign quiz and the intersection quiz both work on the robot.
+Section 1 is the approved brief, kept word for word. Sections 2 to 6 describe
+what was built; section 7 lists, stage by stage, every place the build
+departs from section 1 or from DESIGN.md, and why. `docs/BUILD_STATUS.md`
+has the item-by-item status against the design.
 
 ## 1. Architecture changes approved for this work
 
@@ -23,182 +26,155 @@ this file to match what was built.
 
 **Modes.** DRIVE: as today. QUIZ_SIGNS: stays in IDLE with motors at 0, signs on continuously. QUIZ_INTERSECTION: LANE_FOLLOW, APPROACH in READ_SIGN and PAUSE, CROSS (`hold_steer` on `road_yaw`) from ENTERING to the end of EXITING, REACQUIRE in CONTINUE, then IDLE `QUIZ_EXIT_M` past the centre. At each zone change, speed is 0 for `ZONE_PAUSE_S`. Mode changes only in IDLE.
 
-## 2. Existing names reused
+## 2. As built: modules and entry points
 
-Names are the code's, not DESIGN.md's (`robot_types.py`, `behavior/`,
-`test/`, `HealthWarning`, `run_ui` in `ui/screen.py`).
+Names are the code's (`robot_types.py`, `behavior/`, `test/`,
+`HealthWarning`, `run_ui` in `ui/screen.py`).
 
-### Types (`robot_types.py`)
-
-| Name | Reused for |
-| --- | --- |
-| `Frame`, `FrontMasks` (`white`, `red`, `hsv`, `bgr`, `scale`) | input to `process_signs` and `process_location` |
-| `FrontResult` (`view`, `lane`, `sign`, `mean_v`, `t`, `seq`) | still the front thread's one object per frame |
-| `SignObs` (`sign`, `score`, `bbox`, `t`, `seq`) | gains fields, keeps these |
-| `SignType`, `Action` | `STOP` member renamed `PAUSE`; other members unchanged |
-| `State` (all nine members) | no new states; QUIZ_SIGNS stays in `IDLE` |
-| `UiCommand.START`, `STOP`, `NEXT_VIEW` | the PS5 buttons send the same commands as the taps |
-| `HealthWarning` | gains `VISION_STALE` |
-| `UiPacket`, `DriveCmd`, `MotorCmd`, `LaneEstimate`, `RoadYaw`, `ImuSample` | unchanged apart from the `UiPacket` fields listed in section 1 |
-| `LatestValue` | slot for the newest `VisionResult` in the control process |
-
-### Functions and classes
-
-| Name | Where | Reused for |
+| Stage | Module | Main names |
 | --- | --- | --- |
-| `mask_white`, `mask_red`, `mask_yellow`, `mask_road`, `mask_green` | `perception/color.py` | sign candidates, red check, crossing line, road widening, side surface. No new colour test is written outside this module |
-| `make_front_masks(frame, cfg, with_signs)` | `perception/color.py` | masks once per frame; `with_signs=True` on sign frames |
-| `make_side_masks` | `perception/color.py` | stage 8 surface box |
-| `process_front_frame(frame, signs_enabled, cfg, tracker)` | `perception/pipeline.py` | calls `process_signs` at `SIGN_HZ` (stage 3), `process_location` (stage 5) |
-| `band_to_ground`, `find_road_edges` | `perception/front_lane.py` | road widening uses the same edge finder and band calibration |
-| `is_fresh` | `estimation/lane_fusion.py` | staleness of a `VisionResult` |
-| `check_health` | `estimation/health.py` | gains the VISION_STALE test |
-| `RoadYawTracker` | `estimation/road_yaw.py` | CROSS target |
-| `hold_steer` | `control/turn_controller.py` | CROSS steering |
-| `target_speed`, `_base_speed` | `control/speed_governor.py` | already return `APPROACH_SPEED`, `CROSS_SPEED`, `REACQUIRE_SPEED` |
-| `drive_for_state` | `control/command.py` | gains the CROSS branch and the judging pause |
-| `Behaviour`: `step`, `_apply_commands`, `_handler`, `_enter`, `_check_safety`, `_set_flag`, `signs_enabled`, `exposure_hold`, `drift_request` | `behavior/state_machine.py` | gains `mode`, `_on_approach`, `_on_cross`, `_on_reacquire` |
-| `choose_action` | `behavior/state_machine.py` | unchanged except the PAUSE rename |
-| `System`, `build_system`, `control_step`, `shutdown`, `_read_commands` | `main.py` | gain the sign model, voter, tracker, worker |
-| `start_ui`, `stop_ui`, `make_ui_packet`, `send`, `read_commands`, `_MAIN_COMMANDS` | `ui/link.py` | new packet fields, new commands forwarded |
-| `Screen` (`update`, `draw`, `handle_input`, `_camera_image`, `_draw_column`), `run_ui`, `_route`, `open_display` | `ui/screen.py` | banner on every view; the gamepad and announcer run inside `run_ui`'s loop |
-| `draw_front_overlay`, `draw_side_overlay`, `_px`, `_draw_strip`, theme colours | `ui/overlay.py` | `draw_annotations` is added beside them and uses `_px` |
-| `draw_text` | `ui/text.py` | banner, sign label, scores |
-| `draw_header`, `draw_status` | `ui/panels.py` | mode, zone and sign vote rows |
-| `LoopLog`, `COLUMNS`, `_cell` | `loop_log.py` | new columns |
-| `CameraStream`, `CsiSource`, `UsbSource`, `ExposureControl` | `hal/` | stage 7 publishes frames from the front `CameraStream`; stage 8 starts the side one |
-| `RecordingWriter`, `read_index`, `load_frame`, `iter_frames` | `tools/recording.py` | `collect_signs`, replay, tests |
-| `replay_step`, `format_line`, `show`, `run` | `tools/replay.py` | extended with the sign panel |
-| `SLIDERS`, `config_with`, `render`, `tint` | `tools/tune_colors.py` | white and red sliders |
-| `USB_SoundController.play_audio`, `stop_sound`, `close` | `usb_sound_controller.py` (repo root, not modified) | playback of the pre-rendered WAVs |
-| `PS5_Controller.check_controls`, `control_request`, `reset_controller_state` | `manual/ps5_controller.py` (not modified) | button reading. `initialize_controller` is not called: it blocks until a controller connects |
+| 1 | `robot_types.py` | `Zone`, `RunMode`, `Surface`, `AnnotationKind`, `Annotation`, `LocationEvidence` (with `dash_dists_m`), `LocationObs`, `SignVote`, `SignModel`, `VisionResult`; `SignType.PAUSE`, `Action.PAUSE`; `UiCommand.MODE_*`; `HealthWarning.VISION_STALE`; `FrontResult.location`; `UiPacket.mode`, `.location`; `SideResult.surface`, `.annotations` |
+| 2 | `perception/signs.py` | `sign_roi`, `sign_boxes`, `find_sign_candidates(line_mask, cfg)`, `pick_sign`, `crop_sign(frame, box)`, `normalise_crop`, `load_sign_model`, `hog_features(gray, hog)`, `classify_sign` -> (sign, margin, scores), `red_check`, `process_signs`, `sign_label` |
+| 2 | `perception/color.py` | `mask_dark_lines` (sign outlines) |
+| 2 | `tools/collect_signs.py`, `tools/train_signs.py`, `models/sign_svm.npz` | crops (`--all`, `--random`), laptop training (`--holdout`) |
+| 3 | `behavior/sign_voter.py` | `SignVoter.add`, `decided` -> `SignVote`, `reset` |
+| 3 | `perception/pipeline.py` | `SignPacer` (`SIGN_HZ`) |
+| 3 | `ui/overlay.py`, `ui/panels.py`, `ui/screen.py` | `draw_annotations`, `draw_sign_overlay`, `draw_sign_panel`; `draw_banner`, `quiz_rows`, `zone_label`; mode keys 1 / 2 / 3 |
+| 4 | `ui/gamepad.py` | `Gamepad.poll(events, state)`, `start_or_stop` |
+| 4 | `ui/announcer.py` | `Announcer.prepare`, `update(packet, now)`, `close`; `render_phrase`, `wav_seconds` |
+| 4 | `ui/course.py` | `course_module` (the repo root's `usb_sound_controller`, `manual/ps5_controller`) |
+| 5 | `perception/location.py` | `row_to_metres`, `crossing_line_row`, `road_widening`, `flare_row`, `dash_positions`, `process_location(masks, cfg, t, seq, line_px)` |
+| 5 | `perception/color.py` | `mask_dash` (Lab b*) |
+| 5 | `estimation/location.py` | `LocationTracker.update(evidence, speed_cmd, now, sign, side)`, `get`, `reset`, `learned_speed`; `zone_position`, `camera_fix`, `dash_travel` |
+| 6 | `behavior/state_machine.py` | `Behaviour.mode`, `.location`, `.paused`; `_quiz_target`, `_on_approach`, `_on_cross`, `_on_reacquire`, `_update_pause` |
+| 6 | `control/command.py` | CROSS branch (`hold_steer`), judging pause |
+| 6 | `main.py`, `loop_log.py` | `System.locator`, `_location`, zone reports; log columns `mode`, `zone`, `s`, `loc_source`, `sign` |
+| 7 | `hal/shared_frame.py` | `SharedFrame.create`, `attach`, `handle`, `publish`, `wait`, `read`, `close` |
+| 7 | `perception/worker.py` | `start_worker`, `run_worker`, `stop_worker`, `take_result`, `put_latest`, `Worker` |
+| 7 | `perception/pipeline.py`, `main.py` | `process_vision`; `process_front_frame(..., with_vision)`; `_vision`, `_vision_age`, `_front_for_ui` |
+| 8 | `perception/side_surface.py` | `classify_surface`, `process_side_frame` |
+| 8 | `main.py`, `estimation/health.py` | `_build_side_camera`, `_fps`; `fps_min`; log column `side_surface` |
+| 8 | `tools/record.py --side`, `tools/side_fixes.py` | two-camera recordings; `side_changes`, `near_junction`, `summary_lines` |
 
-### Config (`config.py`)
+Tests (`test/`): `test_quiz3_types`, `test_signs`, `test_sign_quiz`,
+`test_operator`, `test_location`, `test_intersection_quiz`,
+`test_vision_worker`, `test_side`; 533 tests in all pass on the Pi. Real
+frames in `test/data/` (`no_sign`, `junction`, `junction_seq`, `side`).
 
-`FRONT_BANDS`, `FRONT_SIZE`, `FRONT_LANE_SIZE`, `ROAD_WIDTH_M`, `MIN_LINE_PX`,
-`MAX_OBS_AGE_S`, `CONTROL_HZ`, `SIGN_HZ`, `SIGN_MIN_AREA_PX`,
-`SIGN_ASPECT_MIN`, `SIGN_ASPECT_MAX` (values move to bracket 1.65),
-`SIGN_RED_MIN_FRAC`, `SIGN_VOTES_NEEDED`, `WHITE_S_MAX`, `WHITE_V_REL`,
-`WHITE_V_PCT`, `RED_H_LOW_MAX`, `RED_H_HIGH_MIN`, `RED_S_MIN`,
-`CROSS_LINE_MIN_FRAC`, `APPROACH_SPEED`, `CROSS_SPEED`, `REACQUIRE_SPEED`,
-`REACQUIRE_CONF`, `REACQUIRE_FRAMES`, `CROSS_TIMEOUT_S`, `HOLD_KP`,
-`SPEED_MPS_PER_UNIT`, `SIDE_CAM_DEVICE`, `SIDE_CAM_FOURCC`, `SIDE_SIZE`,
-`SIDE_CAM_X_M`, `GREEN_CHROM_MIN`, `DARK_SUM_MIN`, `UI_HZ`,
-`UI_IMAGE_EVERY`, `UI_CMD_QUEUE_SIZE`, `DISPLAY_SIZE`, `LOOP_LOG_*`.
+## 3. As built: how it runs
 
-## 3. New names
+**Processes and threads.** Control process: the 30 Hz loop (the only place
+motors are commanded), the front camera thread (lane; with the vision worker
+off, also location evidence and signs), the side camera thread (surface box)
+and the IMU thread. Operator process (`run_ui`): display, PS5 controller,
+announcer; the control process never imports pygame. Vision worker process
+(`VISION_WORKER_ENABLED`, off by default): location evidence and signs on
+the frames the camera thread shares.
 
-### Types (`robot_types.py`), all from section 1
+**Where the robot is.** `LocationTracker` sets s (the rear axle's distance
+from the junction centre, negative before) on each front frame from the best
+source: the crossing line (seen from 1.29 m to 0.66 m ahead with the
+2026-11-15 calibration); the flare plus `FLARE_TO_CENTRE_M`; dash odometry
+(how far our own line's dashes slid since the last frame); a speed learned
+from recent dash travel; else it holds. A pass starts after
+`LOCATION_START_FRAMES` fixes in a row and ends at `LOCATION_PASS_END_M`. The
+side camera's two fixes are built but off (`SIDE_FIXES_ENABLED`).
 
-Enums `Zone`, `RunMode`, `Surface`; `AnnotationKind` (RECT, LINE, POINT,
-TEXT) for `Annotation.kind`; dataclasses `Annotation`, `LocationEvidence`,
-`LocationObs`, `SignVote`, `SignModel`, `VisionResult`; new members and
-fields as listed in section 1.
+**Zones** (rear-axle s, built in `config.py` from `ROBOT_FRONT_M` = 0.33 m,
+`JUNCTION_CORNER_M` = 0.28 m and `CROSS_ROAD_EDGE_M` = `ROAD_WIDTH_M` / 2):
 
-### Modules and functions
-
-| Stage | Module | Names |
+| Zone | Starts | On the mat |
 | --- | --- | --- |
-| 2 | `perception/signs.py` | `find_sign_candidates`, `pick_sign`, `crop_sign`, `normalise_crop`, `load_sign_model`, `hog_features`, `classify_sign`, `red_check`, `process_signs` (DESIGN.md names) |
-| 2 | `tools/collect_signs.py`, `tools/train_signs.py`, `models/` | as in DESIGN.md |
-| 3 | `behavior/sign_voter.py` | `SignVoter.add`, `decided` (returns a `SignVote` or None), `reset` |
-| 3 | `ui/overlay.py` | `draw_annotations(img, annotations, scale)` |
-| 4 | `ui/gamepad.py` | `Gamepad` (`poll()` returns a list of `UiCommand`) |
-| 4 | `ui/announcer.py` | `Announcer` (`prepare()`, `update(packet)`, `close()`) |
-| 5 | `perception/location.py` | `crossing_line_row`, `road_widening`, `row_to_metres`, `process_location` |
-| 5 | `estimation/location.py` | `LocationTracker` (`update`, `get`, `reset`) |
-| 6 | `behavior/state_machine.py` | `_on_approach`, `_on_cross`, `_on_reacquire`, `Behaviour.mode` |
-| 7 | `hal/shared_frame.py` | `SharedFrame` (`publish`, `read`, `close`) |
-| 7 | `perception/worker.py` | `start_worker`, `run_worker`, `stop_worker` |
+| Read the sign | when the sign is cut off by the front camera's view, else -0.73 | sign leaving the view |
+| Pause zone | -0.61 | the robot's front reaches the corners |
+| Entering intersection | -0.48 | the front reaches the cross road |
+| Turn zone | -0.10 | 2 cm before the rear wheels are halfway from the cross road's edge to the yellow line |
+| Exiting intersection | +0.04 | (course diagram) |
+| Continue travel | +0.28 | the rear axle reaches where the road stops widening |
 
-### Config
+Zones only move forward within a pass. In QUIZ_INTERSECTION the behaviour
+follows them (APPROACH in Read the sign and Pause, CROSS from Entering to the
+end of Exiting, REACQUIRE after, IDLE at `QUIZ_EXIT_M` = 0.4 m), stopping
+`ZONE_PAUSE_S` at each change. A zone is reported (terminal, voice, banner)
+when it changes from one zone to the next within a pass.
 
-Named in the brief: `SIGN_ROI`, `SIGN_BBOX_PAD_FRAC`, `SIGN_CLEAR_FRAMES`,
-`FLARE_TO_CENTRE_M`, `ZONE_REF_X_M`, `ZONE_BOUNDS_M`, `ZONE_PAUSE_S`,
-`QUIZ_EXIT_M`, `PS5_BUTTONS`, `VISION_WORKER_ENABLED`, `SIDE_BOX`.
+**Signs.** The candidate is the sign's thin black outline inside `SIGN_ROI`;
+the crop is classified by HOG + a linear SVM with a NONE class, with a red
+check for Pause; `SignVoter` holds the decision and a steady box. In
+QUIZ_SIGNS the robot stays in IDLE with signs read all the time; in
+QUIZ_INTERSECTION signs are read through the whole run.
 
-From DESIGN.md, missing from `config.py` today: `SIGN_CROP_PX`,
-`SIGN_MARGIN_MIN`, `SIGN_CLAHE_CLIP`, `SIGN_CLAHE_TILES`, `SIGN_MODEL_PATH`.
+## 4. Found along the way
 
-Proposed, not named anywhere yet (to confirm):
-
-| Name | Meaning |
-| --- | --- |
-| `SIGN_FILL_MIN` | contour area ÷ bounding-rectangle area a candidate needs |
-| `SIGN_BORDER_PX`, `SIGN_BORDER_DARK_FRAC` | width of the ring tested around a candidate, and the dark fraction it needs |
-| `SIGN_BOX_FRAMES` | recent boxes the voter takes the median over |
-| `SIGNS_DATA_DIR` | where `collect_signs` writes crops |
-| `VISION_STALE_S` | age of the newest `VisionResult` that raises VISION_STALE |
-| `AUDIO_ENABLED`, `AUDIO_VOLUME`, `AUDIO_DIR` | announcer switch, volume, folder for the rendered WAVs |
-| `SIGN_PHRASES`, `ZONE_PHRASES`, `MODE_LABELS` | spoken and displayed text per sign, zone and mode |
-| `START_MODE` | `RunMode` at start-up |
-
-### Removed
-
-`OCTAGON_CORNERS`, `ARROW_ASYM_MIN`, `SIGN_SIDE` (replaced by `SIGN_ROI`),
-`IntersectionObs`, `FrontResult.inter`. `APPROACH_ON`, `APPROACH_OFF` and
-`STOP_LINE_Y_FRAC` lose their only reader when `_on_lane_follow` moves to
-`LocationObs` in stage 6.
-
-## 4. Found while reading
-
-- Baseline: 344 tests pass on the Pi (`python -m pytest test`, 16 s).
-- `autonomous/recordings/` is git-ignored, so tests can't read recordings
-  from there on another machine. Test frames go in `test/data/` as a small
-  number of committed images.
-- scikit-learn is not installed on the Pi. `train_signs.py` tests skip
-  without it.
-- The front camera sees the ground from 0.71 m to 1.66 m ahead of the rear
-  axle (`FRONT_BANDS`). Once the junction centre is nearer than 0.71 m the
-  crossing line is out of view, so every zone from there on is placed by
-  dead reckoning (or the side camera, stage 8).
+- Baseline before stage 1: 344 tests on the Pi; now 533.
+- `autonomous/recordings/` is git-ignored: tests use the small set of
+  committed frames in `test/data/`.
+- scikit-learn is not on the Pi; `train_signs.py` runs on a laptop and its
+  tests skip without it.
+- The real signs are a white card with a thin black outline (about 1.33 wide
+  to tall), not a white panel in a thick black box; the outline is the
+  candidate (stage 2).
+- The front camera was recalibrated on 2026-11-15 (board session): it sees
+  0.66-1.29 m ahead, not 0.71-1.66 m. The `signs_*` and `straight_*`
+  recordings predate it, so their distances are approximate.
+- The far rows read distances up to 10% short (outer `FRONT_BANDS`
+  extrapolated); dash odometry is not affected (it compares the same dashes).
+- A fixed m/s per unit of speed command was replaced by dash odometry
+  (approved 2026-11-15): it changes with battery charge and can't see stops.
+- The side webcam gives YUYV at 3 fps (it lists 30) and MJPG at 19; its
+  colours are washed out (grass fails the green test). Its exposure is left
+  on auto: the `USB_*` manual settings are unconfirmed.
 - `PS5_Controller.initialize_controller` blocks until a controller connects,
-  and `USB_SoundController.__init__` calls `pygame.init()`.
-- Attached to the Pi on 2026-11-10: a Sonix USB webcam
-  (`/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._Webcam_Webcam-video-index0`),
-  a Plugable USB audio device (ALSA card 2), `text2wave` and `festival`. No
-  game controller was connected.
+  so `Gamepad` attaches on pygame's device events instead.
+- The `junction_1` recording's lane fit fails near the mat's end by the
+  wall (lane conf 0-0.3): a lane-following issue, not a location one.
 
-## 5. Answers (2026-11-10)
+## 5. Answers
 
-| # | Question | Answer | Where it lands |
-| --- | --- | --- | --- |
-| 1 | Zone boundaries | The course zone diagram. Read off it, scaled by `ROAD_WIDTH_M`: Read the sign from 0.73 m before the centre, Pause zone from where the road widens (0.28 m), Entering from 0.17 m, Turn zone ±0.04 m about the crossing line, Exiting to 0.18 m past, then Continue travel. **To confirm with a tape.** | `ZONE_BOUNDS_M` |
-| 1 | Point the judges watch | **Still open** | `ZONE_REF_X_M` (None) |
-| 2 | PS5 buttons | Cross is both START and STOP; the rest were mine to choose: Square = Sign Reading, Triangle = Intersection Detection, Circle = Drive, Options = next view | `PS5_BUTTONS` |
-| 3 | Sign position | In front and to the left, about 1 inch off the ground: the left corner of the junction on the far side of the cross road | `SIGN_ROI`, set from the sign recordings in stage 2 |
-| 4 | Side camera | Final position: right side, a couple of inches before the rear axle, angled outward. It can't see the road edge on a straight; it sees road when the robot comes into a junction | `SIDE_CAM_DEVICE` set; stage 8 can go ahead |
-| 5 | `SPEED_MPS_PER_UNIT` | Not measured | Needed before stage 6: dead reckoning places every zone from about Pause onward |
-| 6 | `test_sound.py` | Passes on the Pi | The announcer can use `USB_SoundController` as it is |
-| 7 | Pause sign | The red octagon is in a black box, like the arrows | One candidate test serves all four signs |
-| 8 | Crossing line | Yellow dotted line across the junction | `crossing_line_row` must accept a dashed line |
-| 9 | Flare to centre | Roughly 0.28 m | `FLARE_TO_CENTRE_M` |
-| 10 | `FrontResult.inter` | Renamed `FrontResult.location` (a `LocationEvidence`); `UiPacket.location` is the `LocationObs` | done in stage 1 |
-| 11 | Banner and spoken text | As proposed | `MODE_LABELS`, `SIGN_PHRASES`, `ZONE_PHRASES` |
-| 12 | `draw_annotations` in stage 2 | Yes | stage 2 |
-| 13 | Removals | `SIGN_SIDE` removed in stage 1; `APPROACH_ON`, `APPROACH_OFF`, `STOP_LINE_Y_FRAC` in stage 6 | |
-| 14 | Proposed config names | Fine | |
+| # | Date | Question | Answer | Where it lands |
+| --- | --- | --- | --- | --- |
+| 1 | Nov 10 | Zone boundaries | From the course zone diagram (superseded on Nov 15: rows 15-19) | `ZONE_BOUNDS_M` |
+| 1 | Nov 10 | Point the judges watch | The rear axle decides the zone; bounds are written for it | `ZONE_REF_X_M = 0.0` |
+| 2 | Nov 10 | PS5 buttons | Cross = START and STOP; Square = Sign Reading, Triangle = Intersection Detection, Circle = Drive, Options = next view | `PS5_BUTTONS` |
+| 3 | Nov 10 | Sign position | Front left, about 1 inch off the ground, at the left corner on the far side of the cross road | `SIGN_ROI` |
+| 4 | Nov 10 | Side camera | Right side, a couple of inches before the rear axle, angled outward; sees road only coming into a junction | `SIDE_CAM_DEVICE`, stage 8 |
+| 5 | Nov 10 | `SPEED_MPS_PER_UNIT` | Not measured; on Nov 15 replaced in the tracker by dash odometry | not used by location |
+| 6 | Nov 10 | `test_sound.py` | Passes on the Pi | `USB_SoundController` reused as it is |
+| 7 | Nov 10 | Pause sign | Red octagon, on the same outlined card as the arrows | one candidate test for all four |
+| 8 | Nov 10 | Crossing line | Yellow dotted line | `crossing_line_row` closes dash gaps |
+| 9 | Nov 10 | Flare to centre | Roughly 0.28 m (where the widening starts); the flare test fires 0.1 m later, so 0.18 m measured | `FLARE_TO_CENTRE_M`, `JUNCTION_CORNER_M` |
+| 10 | Nov 10 | `FrontResult.inter` | Renamed `FrontResult.location` | stage 1 |
+| 11 | Nov 10 | Banner and spoken text | As proposed | `MODE_LABELS`, `SIGN_PHRASES`, `ZONE_PHRASES` |
+| 12 | Nov 10 | `draw_annotations` in stage 2 | Yes | stage 2 |
+| 13 | Nov 10 | Removals | `SIGN_SIDE` in stage 1; `APPROACH_ON`, `APPROACH_OFF`, `STOP_LINE_Y_FRAC` in stage 6 | done |
+| 14 | Nov 10 | Proposed config names | Fine | |
+| 15 | Nov 15 | Junction shape | A plus: both dashed centre lines run through the centre | `crossing_line_row`, dash odometry |
+| 16 | Nov 15 | Read the sign | Starts when the sign leaves the front camera's view | `LocationTracker.sign_cut`, `READ_SIGN_LATEST_M` |
+| 17 | Nov 15 | Intersection entrance; robot front | The cross road's near edge; the front is 0.33 m ahead of the rear axle (will change with a front piece) | `CROSS_ROAD_EDGE_M`, `ROBOT_FRONT_M` |
+| 18 | Nov 15 | Pause zone start | When the front reaches where the corners start | `JUNCTION_CORNER_M` |
+| 19 | Nov 15 | Turn and Exiting (after a run on the mat) | Turn zone 2 cm earlier; Exiting until the road stops widening on the far side | `TURN_ZONE_EARLY_M`, last bound `JUNCTION_CORNER_M` |
+| 20 | Nov 15 | Speed constant vs dash odometry | Use dash odometry, with a learned speed as fallback | `estimation/location.py` |
 
-## 6. Changes these answers make to DESIGN.md
+## 6. Edits DESIGN.md needs
 
-`DESIGN.md` is an export and is not edited here. The live doc could not be
-edited from the build session on 2026-11-10 (no Claude Docs connector), so
-these are the edits it needs.
+`DESIGN.md` is an export and is not edited here; these are the edits the live
+doc needs to match the build.
 
 | Section of the design | Says | Should say |
 | --- | --- | --- |
-| Overview, Hardware (side camera), Key design decision 1 | The right-side camera faces down and measures the distance to the right road edge on straights | The side camera is angled outward, a couple of inches before the rear axle on the right. It can't see the road edge on a straight. It sees road only coming into a junction, so its job is a surface box (grass, road or yellow) that fixes the robot's position at a junction |
-| Side camera in decisions; Fusing lateral error; Lane filter; `side_lane.py`; `SideBias` | Side lateral reading fused with the front camera | Not possible with this mount: on straights lateral error comes from the front camera alone. `SIDE_FUSION_ENABLED`, `SideBias`, `find_boundary_x`, `edge_to_offset` and the side terms of `LaneFilter` have no input. The opening and edge-back cues become surface changes in `SIDE_BOX` |
-| Key design decision 5; `perception/signs.py` | Four-cornered white blobs on `SIGN_SIDE` of the road; STOP | White panel inside a black box, about 1.65 wide to tall, searched for inside `SIGN_ROI`; the fourth sign is PAUSE (a red octagon, also in a black box) |
-| Open question "Sign placement" | Which side, what height | Front left, about 1 inch off the ground, at the left corner on the far side of the cross road |
-| Open question "Junction shapes" | Four-way or T | The quiz junction is four-way with rounded corners; the road starts to widen about 0.28 m before the centre, and a yellow dotted line crosses it |
-| Open question "Stop sign behaviour" | Where to stop | The course defines six zones along the road (`Zone`, `ZONE_BOUNDS_M`); the Pause zone runs from the widening to the cross road's near edge |
-| Open question "Start and emergency stop" | Tap, key or button | PS5 Cross button starts and stops, as well as the screen and keyboard |
-| Runtime table; `ui` process | Display process draws and reads taps | Operator process: display, PS5 controller and audio. A vision worker process does location and sign image work |
-| Data types | `IntersectionObs`, `FrontResult.inter`, `SignType.STOP`, `Action.STOP` | `LocationEvidence`, `FrontResult.location`, `PAUSE`; plus the types in section 1 |
-| Config: Junctions and signs | `SIGN_SIDE`, `OCTAGON_CORNERS`, `ARROW_ASYM_MIN` | removed; new names in section 3 |
+| Overview, Hardware (side camera), Key design decision 1 | The right-side camera faces down and measures the distance to the right road edge on straights | The side camera is angled outward, a couple of inches before the rear axle on the right. It can't see the road edge on a straight; it classes a surface box (road or grass) that changes at the junction's corner and past the cross road. Its fixes are less precise than dash odometry and are off |
+| Side camera in decisions; Fusing lateral error; Lane filter; `side_lane.py`; `SideBias` | Side lateral reading fused with the front camera | Not possible with this mount: lateral error comes from the front camera alone. The opening and edge-back cues don't exist |
+| Hardware (side camera), config | YUYV | MJPG at 19 fps (this webcam gives YUYV at 3) |
+| Key design decision 5; `perception/signs.py` | Four-cornered white blobs on `SIGN_SIDE`; STOP | A white card with a thin black outline, found by its outline inside `SIGN_ROI`; the fourth sign is PAUSE (a red octagon on the same card) |
+| `perception/intersection.py`; `IntersectionObs`; APPROACH / DECIDE position fix | `approach_score`, crossing line passing `STOP_LINE_Y_FRAC` | `perception/location.py` gives distances (crossing line, flare, dash positions); `estimation/location.py`'s `LocationTracker` gives s and the zone; the zone drives the quiz states |
+| Dead reckoning (`SPEED_MPS_PER_UNIT`) | speed command x m/s per unit | Dash odometry from our own line's dashes, with a speed learned from it as fallback |
+| Open questions "Sign placement", "Junction shapes", "Stop sign behaviour", "Start and emergency stop" | open | Front left, 1 inch up; a four-way plus junction with rounded corners; the six course zones (section 3 above) with a judging pause at each; PS5 Cross, screen and keyboard |
+| Runtime table; `ui` process | Display process draws and reads taps | Operator process: display, PS5 controller and audio. Optional vision worker process for location and sign image work |
+| Behaviour table | APPROACH -> DECIDE -> STOP_HOLD / TURN / CROSS | In QUIZ_INTERSECTION: LANE_FOLLOW -> APPROACH -> CROSS -> REACQUIRE -> IDLE by zone; DECIDE, STOP_HOLD and TURN are not built |
+| Data types | `IntersectionObs`, `FrontResult.inter`, `SignType.STOP`, `Action.STOP` | `LocationEvidence`, `LocationObs`, `FrontResult.location`, `PAUSE`, and the types in section 1 |
+| Display views | Status / Front / Side / Split | DRIVE / CAMERA / DIAGNOSTIC, with a run-mode banner (and the zone during a pass) on every view |
 
-## 7. Built so far: where it differs from DESIGN.md
+## 7. Where the build differs, stage by stage
 
 | Stage | Item | Difference and why |
 | --- | --- | --- |
@@ -261,3 +237,4 @@ these are the edits it needs.
 | 8 | `tools/record.py --side`, `tools/side_fixes.py` | Two-camera recordings (side in `<out>/side/`, same clock). `side_fixes` gives each side frame the front tracker's s and prints every settled change and the medians next to `SIDE_FIXES_M`; `--save` writes annotated side frames for choosing `SIDE_BOX` |
 | 8 | Display and log | The side inset draws the box in its class colour with the road fraction; the loop log gains `side_surface` |
 | 8 | Test data | `test/data/side/`: 6 real side frames (grass, road, a dark band that reads as mixed) |
+| 9 | **Zone positions, second change (2026-11-15, after another run on the mat)** | Turn zone starts `TURN_ZONE_EARLY_M` (0.02 m) earlier: -0.10 m. Exiting lasts until the rear axle reaches `JUNCTION_CORNER_M` past the centre (+0.28 m; was +0.18). `CROSS_TIMEOUT_S` raised from 3 to 6 s: CROSS now spans 0.76 m, 3.2 s at the 0.235 m/s measured at `CROSS_SPEED` in the 16:37 run log |

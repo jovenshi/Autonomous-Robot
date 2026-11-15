@@ -1,4 +1,5 @@
-"""Display process: compose the screen, show it full screen, read taps and keys.
+"""Operator process: compose the screen, show it full screen, read taps, keys
+and the PS5 controller, and speak zones and signs.
 
 run_ui is the process entry point (started by ui.link.start_ui). Each cycle
 it waits on the packet queue with get(timeout) until the next redraw (every
@@ -10,6 +11,9 @@ its top in every view (camera views are letterboxed under it, never
 stretched) and a 160 px control column on the right in every view: START,
 STOP (not an e-stop), the warning light and VIEW.
 Views cycle DRIVE (glanceable, default) -> CAMERA -> DIAGNOSTIC (every number).
+
+The PS5 controller (ui/gamepad.py) is read from the same pygame events as the
+taps; the announcer (ui/announcer.py) is fed the newest packet every cycle.
 
 pygame is imported only inside this process, after the display environment
 defaults are set, so the main process never loads it.
@@ -23,6 +27,8 @@ import cv2
 import numpy as np
 
 from robot_types import State, UiCommand
+from ui.announcer import Announcer
+from ui.gamepad import Gamepad, start_or_stop
 from ui.overlay import (AMBER, BG, GREEN, LINE, MUTED, PANEL, RED, TEXT, draw_front_overlay,
                         draw_no_data, draw_side_overlay, draw_sign_overlay, draw_sign_panel,
                         mark_stale)
@@ -35,7 +41,6 @@ VIEWS = ("drive", "camera", "diagnostic")
 COLUMN_ZONES = ("start", "stop", "light", "next")
 COLUMN_SPLITS = (0.0, 0.3, 0.66, 0.85, 1.0)        # fractions of screen height
 TAP_COMMANDS = {"start": UiCommand.START, "stop": UiCommand.STOP, "next": UiCommand.NEXT_VIEW}
-START_STATES = (State.IDLE, State.SAFE_STOP)        # space bar means START here
 INSET_FRAC = 0.33                                   # side-camera inset, fraction of main width
 GAP = 16                                            # px; margin inside the main area
 BANNER_H = 30                                       # px; run-mode banner along the top
@@ -207,7 +212,7 @@ class Screen:
     def _key_command(self, key, pygame):
         if key == pygame.K_SPACE:
             state = self.packet.state if self.packet is not None else State.IDLE
-            return UiCommand.START if state in START_STATES else UiCommand.STOP
+            return start_or_stop(state)
         if key == pygame.K_v:
             return UiCommand.NEXT_VIEW
         for name, command in MODE_KEYS.items():
@@ -245,8 +250,9 @@ def _button(frame, rect, fill, title, subtitle, title_colour, size=34):
 # ---------------------------------------------------------------- process
 
 def run_ui(packet_q, cmd_q, cfg=None):
-    # Display process loop: newest packet -> Screen.draw -> taps -> wait for
-    # UI_HZ. cfg is None when started as a process: it imports config itself.
+    # Operator process loop: newest packet -> Screen.draw -> taps, keys and
+    # PS5 buttons -> announcer -> wait for UI_HZ. cfg is None when started as
+    # a process: it imports config itself.
     signal.signal(signal.SIGINT, signal.SIG_IGN)    # Ctrl-C is main's; main stops us
     if cfg is None:
         import config as cfg
@@ -257,15 +263,20 @@ def run_ui(packet_q, cmd_q, cfg=None):
     pygame, surface = display
     screen, parent = Screen(cfg), os.getppid()
     signal.signal(signal.SIGTERM, lambda *_: setattr(screen, "quit", True))   # stop_ui
-    period, next_t = 1.0 / cfg.UI_HZ, time.monotonic()
+    show(pygame, surface, screen.draw(None, screen.view))  # on screen while phrases render
+    gamepad, announcer = Gamepad(cfg), Announcer(cfg)
     try:
+        announcer.prepare()
+        period, next_t = 1.0 / cfg.UI_HZ, time.monotonic()
         while not screen.quit and os.getppid() == parent:
             next_t += period
             _drain(packet_q, screen, next_t)
             show(pygame, surface, screen.draw(screen.packet, screen.view))
-            _route(screen.handle_input(pygame.event.get()), screen, cmd_q)
+            _read_input(pygame.event.get(), screen, gamepad, cmd_q)
+            announcer.update(screen.packet, time.monotonic())
             next_t = max(next_t, time.monotonic())
     finally:
+        announcer.close()
         pygame.quit()
 
 
@@ -313,6 +324,13 @@ def _drain(packet_q, screen, until):
         screen.update(packet)
         if remaining <= 0:
             return
+
+
+def _read_input(events, screen, gamepad, cmd_q):
+    # Taps and keys, then PS5 buttons, all from this cycle's events.
+    state = screen.packet.state if screen.packet is not None else State.IDLE
+    for command in [screen.handle_input(events)] + gamepad.poll(events, state):
+        _route(command, screen, cmd_q)
 
 
 def _route(command, screen, cmd_q):

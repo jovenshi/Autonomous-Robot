@@ -333,7 +333,7 @@ UI_VIEW_STALE_S = 1.0           # s; a kept camera view older than this is greye
 UI_CHART_S = 5.0                # s; strip chart history (lateral error and steer)
 UI_CHART_LAT_M = 0.10           # m; lateral range (+/-) of the strip chart and the lane gauge
 UI_CHART_GAP_S = 0.3            # s; strip chart breaks the line across a gap this long
-UI_CMD_QUEUE_SIZE = 8           # commands; UI -> main queue (START / STOP taps)
+UI_CMD_QUEUE_SIZE = 8           # commands; UI -> main queue (taps, keys, PS5 buttons)
 UI_STOP_TIMEOUT_S = 1.0         # s; shutdown waits this long for the display process
 UI_START_VIEW = "drive"          # "drive", "camera" or "diagnostic"
 UI_FONT = "/usr/share/fonts/truetype/piboto/Piboto-Regular.ttf"
@@ -357,6 +357,9 @@ PS5_BUTTONS = {
 AUDIO_ENABLED = True
 AUDIO_VOLUME = 0.7              # 0-1
 AUDIO_DIR = "audio"             # relative to autonomous/; phrases rendered to WAV at start-up
+AUDIO_TTS_SCALE = 2.0           # text2wave -scale; as USB_SoundController.play_text_to_speech
+AUDIO_RENDER_TIMEOUT_S = 10.0   # s; one phrase's text2wave render at start-up
+AUDIO_GAP_S = 0.2               # s; silence between two queued phrases
 MODE_LABELS = {                 # RunMode name -> banner on every view
     "DRIVE": "Drive",
     "QUIZ_INTERSECTION": "Intersection Detection",

@@ -1,6 +1,6 @@
 # Quiz 3 plan: sign reading, location zones, modes, audio
 
-**Status:** stage 3 done (sign quiz on the display), 2026-11-10, branch `quiz3`. Section 1 is the approved brief, kept word for word. Sections 2 to
+**Status:** stage 4 done (PS5 controller and audio; the sign quiz is complete), 2026-11-15, branch `quiz3`. Section 1 is the approved brief, kept word for word. Sections 2 to
 4 are the inventory taken from the code before any change. Stage 9 rewrites
 this file to match what was built.
 
@@ -221,3 +221,9 @@ these are the edits it needs.
 | 3 | Mode selection before the PS5 controller | Keys 1 / 2 / 3 on the display keyboard, and `1` / `2` / `3` + Enter in the terminal, send the mode commands. QUIZ_INTERSECTION is selectable but drives like DRIVE until stage 6 |
 | 3 | Display | A 30 px mode banner tops every view, with the voted sign on its right. The camera image is letterboxed under it. The crop in the sign panel is cut from the 320 x 240 view (the display process has no full frame), then normalised as on the robot |
 | 3 | Missing model | `main.py` warns and carries on: signs are boxed but not read |
+| 4 | `Gamepad.poll(events, state)` | Takes this cycle's pygame events (shared with the taps) and the robot's `State`, so `START_STOP` resolves as the space bar does (`start_or_stop`, moved from `ui/screen.py` with `START_STATES`). The joystick is attached on start-up or `JOYDEVICEADDED` and dropped on `JOYDEVICEREMOVED` or a read error |
+| 4 | Held buttons | `PS5_Controller` repeats a held button every 0.5 s; `Gamepad` counts a button again only after a `JOYBUTTONUP`, so a long press on Cross cannot START then STOP |
+| 4 | `ui/course.py` (`course_module`) | New: imports the course files from the repo root. The root is appended to `sys.path`, not inserted, because the root's `ui.py` would shadow the `ui` package |
+| 4 | `Announcer.update(packet, now)` | One phrase at a time: `USB_SoundController` starts each sound at once, so phrases queue (one waiting per kind, newest wins) and the next starts after the last one's length plus `AUDIO_GAP_S`. A vote that clears and comes back is spoken again. WAVs are named `<kind>_<NAME>_<crc of text>.wav` in `AUDIO_DIR` (git-ignored), so a changed phrase re-renders and the rest are reused: about 5 s on a first start-up, none after |
+| 4 | Config | New: `AUDIO_TTS_SCALE` (2.0, as `play_text_to_speech`), `AUDIO_RENDER_TIMEOUT_S`, `AUDIO_GAP_S` |
+| 4 | `ui/link.py` | No change needed: stage 3 already forwards the mode commands |

@@ -299,8 +299,10 @@ def assert_send_under_1ms(times):
 
 @pytest.fixture
 def headless(monkeypatch):
-    # The display process inherits this: SDL draws to nothing, no window.
+    # The operator process inherits these: SDL draws to nothing, no window,
+    # and the announcer plays to nothing.
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
 
 
 def test_ui_process_runs_synthetic_packets_then_dies_unnoticed(headless):

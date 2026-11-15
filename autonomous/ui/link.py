@@ -1,4 +1,5 @@
-"""Main-process side of the display: start it, build packets, send, read taps.
+"""Main-process side of the operator process: start it, build packets, send,
+read commands (taps, keys and PS5 buttons).
 
 Nothing here can block or crash the control loop because of the display:
 send() drops the packet when the one-slot queue is full, read_commands()

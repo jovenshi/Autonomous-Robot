@@ -254,9 +254,12 @@ class Behaviour:
         self._set_sign_flag()
 
     def _set_sign_flag(self):
-        # Signs are read all the time in QUIZ_SIGNS; otherwise from APPROACH
-        # until the junction is left (LANE_FOLLOW, IDLE or SAFE_STOP).
-        if self.mode == RunMode.QUIZ_SIGNS or self.state == State.APPROACH:
+        # Signs are read all the time in QUIZ_SIGNS, and through a whole
+        # intersection quiz run (READ_SIGN starts when the sign leaves the
+        # view, so it must be watched from the start); otherwise from
+        # APPROACH until the junction is left (LANE_FOLLOW, IDLE or SAFE_STOP).
+        quiz_run = self.mode == RunMode.QUIZ_INTERSECTION and self.state in _MOVING_STATES
+        if self.mode == RunMode.QUIZ_SIGNS or quiz_run or self.state == State.APPROACH:
             self._set_flag(self.signs_enabled, True)
         elif self.state in (State.LANE_FOLLOW, State.IDLE, State.SAFE_STOP):
             self._set_flag(self.signs_enabled, False)

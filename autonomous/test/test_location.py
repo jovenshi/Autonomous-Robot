@@ -21,7 +21,7 @@ from perception.pipeline import process_front_frame  # noqa: E402
 from robot_types import Frame, LocationEvidence, Zone  # noqa: E402
 
 HALF_ROAD = config.ROAD_WIDTH_M / 2
-WIDEN_START_M = -config.ZONE_BOUNDS_M[1]           # PAUSE starts where the road starts to widen
+WIDEN_START_M = config.JUNCTION_CORNER_M           # where the road starts to widen
 CORNER_R = WIDEN_START_M - HALF_ROAD               # rounded corner radius
 LINE_HALF_M = 0.012                                 # yellow line half width
 DASH_LEN_M, DASH_PERIOD_M = 0.045, 0.115           # MEASURED on junction_3
@@ -190,6 +190,12 @@ def test_no_dashes_without_a_lane_line():
 
 
 DASHES = (0.70, 0.815, 0.93, 1.045, 1.16)
+B = config.ZONE_BOUNDS_M
+
+
+def mid(i):
+    # s in the middle of zone position i (1 = READ_SIGN ... 5 = EXITING)
+    return (B[i - 1] + B[i]) / 2
 
 
 def moved(dashes, d):
@@ -275,7 +281,8 @@ def test_dashes_carry_s_on_after_the_last_fix():
         dashes = moved(dashes, 0.02)
         obs = tracker.update(ev(seq=seq + i, t=i / 30, dashes=dashes), 0.0, i / 30)
     assert obs.dist_to_centre_m == pytest.approx(0.50) and obs.source == "dashes"
-    assert obs.conf == 1.0 and obs.zone == Zone.READ_SIGN
+    assert obs.conf == 1.0 and obs.zone == [None, Zone.READ_SIGN, Zone.PAUSE, Zone.ENTERING][
+        zone_position(-0.50, config)]
 
 
 def drive(tracker, seq, t, frames, cmd, step, dashes):
@@ -309,13 +316,13 @@ def test_stopped_frames_dont_teach_the_speed_and_nothing_known_holds():
 
 
 def test_zones_never_step_back_in_a_pass():
-    tracker, seq = started(config, s=-0.3)
+    tracker, seq = started(config, s=B[1] - 0.05)
     assert tracker.get().zone == Zone.READ_SIGN
     seq += 1
-    assert tracker.update(ev(cross=0.25, seq=seq), 0.0, 0.0).zone == Zone.PAUSE
+    assert tracker.update(ev(cross=-(B[1] + 0.03), seq=seq), 0.0, 0.0).zone == Zone.PAUSE
     seq += 1
-    obs = tracker.update(ev(cross=0.35, seq=seq), 0.0, 0.0)               # fix puts s back
-    assert obs.zone == Zone.PAUSE and obs.dist_to_centre_m == 0.35
+    obs = tracker.update(ev(cross=-(B[1] - 0.05), seq=seq), 0.0, 0.0)     # fix puts s back
+    assert obs.zone == Zone.PAUSE and obs.dist_to_centre_m == pytest.approx(-(B[1] - 0.05))
 
 
 def test_a_pushed_pass_reports_every_zone_in_order_then_waits():
@@ -342,8 +349,8 @@ def test_ready_flags_follow_the_zone():
     tracker, seq = started(config, s=-1.0)
     obs = tracker.get()
     assert not (obs.sign_read_ready or obs.pause_point_ready or obs.turn_point_ready)
-    for dist, flags in ((0.5, (True, False, False)), (0.2, (True, True, False)),
-                        (0.0, (True, True, True))):
+    for dist, flags in ((-mid(1), (True, False, False)), (-mid(2), (True, True, False)),
+                        (-mid(4), (True, True, True))):
         seq += 1
         obs = tracker.update(ev(cross=dist, seq=seq), 0.0, 0.0)
         assert (obs.sign_read_ready, obs.pause_point_ready, obs.turn_point_ready) == flags
@@ -459,3 +466,80 @@ def test_real_dash_odometry_matches_the_crossing_line():
     # ours the runs differ from single dashes, but they are painted on the
     # ground too, so they slide by the same amount.
     assert all(len(f.dash_dists_m) >= 4 for f in frames)
+
+
+# ---------------------------------------------------------------- sign leaving the view
+
+def sign_obs(seq, box):
+    from robot_types import SignObs, SignType
+    return SignObs(SignType.LEFT if box else SignType.NONE, 1.0, box, seq / 30, seq)
+
+
+EDGE_BOX, MID_BOX = (0, 60, 140, 105), (200, 60, 140, 105)
+
+
+def feed_signs(tracker, seq, boxes, s):
+    # One sign reading per frame, with a crossing fix at s.
+    for box in boxes:
+        seq += 1
+        obs = tracker.update(ev(cross=-s, seq=seq), 0.0, 0.0, sign_obs(seq, box))
+    return obs, seq
+
+
+def test_read_sign_starts_when_the_sign_is_cut_off():
+    tracker, seq = started(config, s=-1.1)
+    obs, seq = feed_signs(tracker, seq, [MID_BOX, EDGE_BOX, None], -1.1)
+    assert obs.zone == Zone.CONTINUE                       # one missed reading: not yet
+    obs, seq = feed_signs(tracker, seq, [None] * (config.SIGN_CUT_READINGS - 1), -1.1)
+    assert obs.zone == Zone.READ_SIGN and obs.sign_read_ready and tracker.sign_cut
+
+
+def test_a_sign_lost_mid_view_or_flickering_is_not_cut_off():
+    tracker, seq = started(config, s=-1.1)
+    obs, seq = feed_signs(tracker, seq, [MID_BOX] + [None] * 5, -1.1)      # lost mid-view
+    assert obs.zone == Zone.CONTINUE
+    obs, seq = feed_signs(tracker, seq, [EDGE_BOX, None, EDGE_BOX, None, EDGE_BOX], -1.1)
+    assert obs.zone == Zone.CONTINUE and not tracker.sign_cut
+    # the same reading passed on again (paced sign reading) counts once
+    tracker.update(ev(cross=1.1, seq=seq + 1), 0.0, 0.0, sign_obs(seq + 1, None))
+    obs = tracker.update(ev(cross=1.1, seq=seq + 2), 0.0, 0.0, sign_obs(seq + 1, None))
+    assert obs.zone == Zone.CONTINUE
+
+
+def test_without_a_sign_read_sign_starts_at_its_latest_bound():
+    tracker, seq = started(config, s=config.READ_SIGN_LATEST_M - 0.01)
+    assert tracker.get().zone == Zone.CONTINUE
+    obs = tracker.update(ev(cross=-(config.READ_SIGN_LATEST_M + 0.01), seq=seq + 1), 0.0, 0.0)
+    assert obs.zone == Zone.READ_SIGN
+
+
+def test_a_sign_cut_off_before_the_pass_counts_when_it_starts():
+    tracker = LocationTracker(config)
+    seq = 0
+    for box in (EDGE_BOX, None, None):
+        seq += 1
+        tracker.update(ev(seq=seq), 0.0, 0.0, sign_obs(seq, box))
+    assert tracker.sign_cut and tracker.get().dist_to_centre_m is None
+    for _ in range(config.LOCATION_START_FRAMES):
+        seq += 1
+        obs = tracker.update(ev(cross=1.25, seq=seq), 0.0, 0.0)
+    assert obs.zone == Zone.READ_SIGN
+
+
+@pytest.mark.skipif(not os.path.isdir(os.path.join(os.path.dirname(__file__), "..", "recordings",
+                                                   "junction_3")),
+                    reason="needs recordings/junction_3 (not in git)")
+def test_real_sign_cut_off_in_junction_3():
+    # Hand-checked: the hexagon sign is first cut by the left edge at #385.
+    from perception.front_lane import LaneTracker
+    from perception.pipeline import SignPacer
+    from perception.signs import load_sign_model
+    from tools.recording import iter_frames
+    rec = os.path.join(os.path.dirname(__file__), "..", "recordings", "junction_3")
+    model, lane, pacer, tracker = (load_sign_model(config.SIGN_MODEL_PATH, config), LaneTracker(),
+                                   SignPacer(), LocationTracker(config))
+    for f in iter_frames(rec, 1, skip_missing=True):
+        res = process_front_frame(f, True, config, lane, model, pacer)
+        if tracker.update(res.location, 0.0, f.t, res.sign).zone == Zone.READ_SIGN:
+            break
+    assert 380 <= f.seq <= 392

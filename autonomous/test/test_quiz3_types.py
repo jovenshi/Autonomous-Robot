@@ -60,8 +60,8 @@ def test_ui_packet_defaults_to_drive_mode():
 def test_zone_config():
     bounds = config.ZONE_BOUNDS_M
     assert len(bounds) == len(Zone) and list(bounds) == sorted(bounds)
-    # PAUSE starts where the road widens; the flare test fires a little past it
-    assert 0 < config.FLARE_TO_CENTRE_M < -bounds[1]
+    # the flare test fires a little past where the road starts to widen
+    assert 0 < config.FLARE_TO_CENTRE_M < config.JUNCTION_CORNER_M
     assert config.QUIZ_EXIT_M > bounds[-1]             # IDLE only after "Continue travel"
     assert config.START_MODE in names(RunMode)
     assert config.VISION_WORKER_ENABLED is False

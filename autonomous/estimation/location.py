@@ -31,7 +31,12 @@ measured, so it doesn't lower conf).
 
 The zone is where s + ZONE_REF_X_M falls among ZONE_BOUNDS_M, and only moves
 forward within a pass: a camera fix that puts s slightly back cannot step
-the zone back.
+the zone back. READ_SIGN starts earlier than its bound when the sign is cut
+off by the edge of the front camera's view: a sign last seen within
+SIGN_CUT_EDGE_PX of the edge, then no sign for SIGN_CUT_READINGS sign
+readings in a row (the sign finder drops an outline the view cuts; one
+missed reading while the sign is still whole doesn't count). A sign that
+drops out mid-view doesn't count.
 """
 import bisect
 from collections import deque
@@ -96,11 +101,17 @@ class LocationTracker:
         self.position = 0                # index into _ZONE_ORDER; never decreases in a pass
         self.guessed_m = 0.0             # metres on the learned speed since the last camera fix
         self.fix_run = 0
+        self.sign_cut = False            # the sign has left the front camera's view
+        self._sign_at_edge = False       # the last sign box seen touched the view's edge
+        self._sign_gone = 0              # sign readings in a row with no box since then
+        self._sign_seq = None
         self._obs = None
 
-    def update(self, evidence, speed_cmd, now):
+    def update(self, evidence, speed_cmd, now, sign=None):
         # evidence: the newest LocationEvidence (or None); speed_cmd: the
-        # speed commanded last loop (0-1). Returns the LocationObs.
+        # speed commanded last loop (0-1); sign: the newest SignObs (or None,
+        # also while sign reading is off). Returns the LocationObs.
+        self._note_sign(sign)
         if self._last_t is not None:
             self._cmd_s += speed_cmd * max(0.0, now - self._last_t)
         self._last_t = now
@@ -111,6 +122,21 @@ class LocationTracker:
 
     def get(self):
         return self._obs
+
+    def _note_sign(self, sign):
+        # Sets sign_cut when a sign last seen at the view's edge is gone.
+        if sign is None or sign.seq == self._sign_seq:
+            return
+        self._sign_seq = sign.seq
+        if sign.bbox is not None:
+            x, _, w, _ = sign.bbox
+            edge = self.cfg.SIGN_CUT_EDGE_PX
+            self._sign_at_edge = x <= edge or x + w >= self.cfg.FRONT_SIZE[0] - edge
+            self._sign_gone = 0
+        elif self._sign_at_edge:
+            self._sign_gone += 1
+            if self._sign_gone >= self.cfg.SIGN_CUT_READINGS:
+                self.sign_cut, self._sign_at_edge = True, False
 
     def learned_speed(self):
         # m/s per unit of speed command from recent dash travel, or None.
@@ -159,7 +185,8 @@ class LocationTracker:
     def _observation(self, now):
         if self.s is None:
             return LocationObs(Zone.CONTINUE, False, False, False, None, 0.0, "none", now)
-        self.position = max(self.position, zone_position(self.s, self.cfg))
+        self.position = max(self.position, zone_position(self.s, self.cfg),
+                            1 if self.sign_cut else 0)
         pos = self.position
         conf = max(0.0, 1.0 - self.guessed_m / self.cfg.LOCATION_DR_CONF_M)
         return LocationObs(zone=_ZONE_ORDER[pos], sign_read_ready=pos >= 1,

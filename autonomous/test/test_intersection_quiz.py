@@ -55,10 +55,18 @@ def quiz():
 
 # ---------------------------------------------------------------- behaviour
 
+B = config.ZONE_BOUNDS_M
+
+
+def mid(i):
+    # s in the middle of zone position i (1 = READ_SIGN ... 5 = EXITING)
+    return (B[i - 1] + B[i]) / 2
+
+
 def test_each_zone_calls_for_its_state(quiz):
     # Steps PAUSE + 0.1 s apart, so every judging pause has ended.
     t, seen = 0.03, []
-    for s in (None, -1.0, -0.5, -0.25, -0.1, 0.0, 0.1, 0.25, 0.35, 0.41):
+    for s in (None, B[0] - 0.2, mid(1), mid(2), mid(3), mid(4), mid(5), B[5] + 0.05, 0.35, 0.41):
         t += PAUSE + 0.1
         seen.append(step(quiz, t, s))
     assert seen == [State.LANE_FOLLOW, State.LANE_FOLLOW, State.APPROACH, State.APPROACH,
@@ -76,7 +84,7 @@ def test_judging_pause_at_every_zone_change(quiz):
     assert quiz.paused
     step(quiz, 2.0 + PAUSE + 0.01, -0.68)
     assert not quiz.paused
-    step(quiz, 5.0, -0.27)                                 # READ_SIGN -> PAUSE
+    step(quiz, 5.0, mid(2))                                # READ_SIGN -> PAUSE
     assert quiz.paused and quiz.state == State.APPROACH
 
 
@@ -90,26 +98,26 @@ def test_no_pause_or_location_outside_the_quiz():
 
 
 def test_cross_timeout_counts_driving_time_only(quiz):
-    step(quiz, 1.0, -0.5)
-    step(quiz, 4.0, -0.15)                                 # ENTERING: CROSS, paused
+    step(quiz, 1.0, mid(1))
+    step(quiz, 4.0, mid(3))                                # ENTERING: CROSS, paused
     assert quiz.state == State.CROSS and quiz.paused
     t = 4.0 + PAUSE                                        # pause over; now drive
-    step(quiz, t, -0.15)
-    assert step(quiz, t + config.CROSS_TIMEOUT_S - 0.1, -0.15) == State.CROSS
-    assert step(quiz, t + config.CROSS_TIMEOUT_S + 0.1, -0.15) == State.REACQUIRE
+    step(quiz, t, mid(3))
+    assert step(quiz, t + config.CROSS_TIMEOUT_S - 0.1, mid(3)) == State.CROSS
+    assert step(quiz, t + config.CROSS_TIMEOUT_S + 0.1, mid(3)) == State.REACQUIRE
 
 
 def test_losing_the_pass(quiz):
-    step(quiz, 1.0, -0.5)
+    step(quiz, 1.0, mid(1))
     assert quiz.state == State.APPROACH
     assert step(quiz, 4.0, None) == State.LANE_FOLLOW     # approach: back to lane following
-    step(quiz, 5.0, -0.1)
+    step(quiz, 5.0, mid(3))
     assert quiz.state == State.CROSS
     assert step(quiz, 8.0, None) == State.REACQUIRE       # cross: hand over to the lane
 
 
 def test_reacquire_hands_back_to_lane_follow_and_the_run_still_ends(quiz):
-    step(quiz, 1.0, -0.1)
+    step(quiz, 1.0, mid(4))
     step(quiz, 4.0, 0.2)
     assert quiz.state == State.REACQUIRE
     t = 7.0
@@ -201,20 +209,21 @@ def test_display_shows_the_zone(tmp_path):
     from test_ui import bare_packet, screen_at
     from ui.panels import quiz_rows, zone_label
     from ui.screen import VIEWS
-    in_pass = bare_packet(state=State.CROSS, mode=RunMode.QUIZ_INTERSECTION, location=loc(-0.1))
+    in_pass = bare_packet(state=State.CROSS, mode=RunMode.QUIZ_INTERSECTION, location=loc(mid(3)))
     no_pass = bare_packet(mode=RunMode.QUIZ_INTERSECTION, location=loc(None))
     assert zone_label(in_pass, config) == "Zone: Entering intersection"
     assert zone_label(no_pass, config) is None
     assert zone_label(bare_packet(), config) is None                 # DRIVE: no location
     rows = dict((label, value) for label, value, _ in quiz_rows(in_pass, config))
-    assert rows["zone"] == "Entering intersection" and rows["s (from centre)"] == "-0.10 m"
+    assert rows["zone"] == "Entering intersection"
+    assert rows["s (from centre)"] == f"{mid(3):+.2f} m"
     assert dict((l, v) for l, v, _ in quiz_rows(no_pass, config))["zone"] == "no junction yet"
     # every view draws; the banner differs with the zone shown
     frame = Frame(junction_scene(-1.0), 0.0, 1, "front")
     front = process_front_frame(frame, False, config)
     screen, _ = screen_at(0.0)
     screen.update(bare_packet(state=State.CROSS, mode=RunMode.QUIZ_INTERSECTION,
-                              location=loc(-0.1), front=front))
+                              location=loc(mid(3)), front=front))
     for view in VIEWS:
         img = screen.draw(screen.packet, view)
         assert img.shape == (config.DISPLAY_SIZE[1], config.DISPLAY_SIZE[0], 3)

@@ -236,11 +236,26 @@ STOP_HOLD_S = 3.0               # s
 # s is the rear axle's distance along the road from the junction centre, in
 # metres, negative before the centre (docs/quiz3_plan.md).
 
-# s at which each zone begins, in driving order: READ_SIGN, PAUSE, ENTERING,
-# TURN, EXITING, CONTINUE. CONFIRM with a tape on the mat: read off the course
-# zone diagram, scaled by ROAD_WIDTH_M; PAUSE starts where the road widens.
-ZONE_BOUNDS_M = (-0.73, -0.28, -0.17, -0.04, 0.04, 0.18)
-ZONE_REF_X_M = 0.0              # m ahead of the rear axle of the point whose position decides the zone; 0 = the rear axle (the pivot)
+# Zones (2026-11-15, from the first runs on the mat), as rear-axle s:
+#   READ_SIGN  when the sign is cut off by the edge of the front camera's view
+#              (estimation/location.py), at READ_SIGN_LATEST_M if it never is
+#   PAUSE      the robot's front reaches where the corners start to curve
+#   ENTERING   the robot's front reaches the cross road's near edge
+#   TURN       the rear wheels are halfway from that edge to the yellow line
+#   EXITING, CONTINUE  0.04 and 0.18 m past the centre (course zone diagram)
+ROBOT_FRONT_M = 0.33            # m; MEASURED 2026-11-15: rear axle to the front of the robot (redo after adding a front piece)
+JUNCTION_CORNER_M = 0.28        # m before the centre where the road starts to widen into the rounded corners (course diagram; also the flare)
+CROSS_ROAD_EDGE_M = ROAD_WIDTH_M / 2   # m before the centre: the cross road's near edge
+READ_SIGN_LATEST_M = -0.73      # m; READ_SIGN starts here if the sign was never seen leaving the view
+# s at which each zone begins, in driving order: READ_SIGN, PAUSE, ENTERING, TURN, EXITING, CONTINUE.
+ZONE_BOUNDS_M = (READ_SIGN_LATEST_M,
+                 -(JUNCTION_CORNER_M + ROBOT_FRONT_M),
+                 -(CROSS_ROAD_EDGE_M + ROBOT_FRONT_M),
+                 -CROSS_ROAD_EDGE_M / 2,
+                 0.04, 0.18)
+ZONE_REF_X_M = 0.0              # m ahead of the rear axle of the point whose position decides the zone; 0 = the rear axle (the bounds above are written for it)
+SIGN_CUT_EDGE_PX = 8            # px (full frame); a sign box this close to the view's edge is being cut off
+SIGN_CUT_READINGS = 2           # sign readings in a row with no box, after one at the edge, that mean the sign is cut off
 FLARE_TO_CENTRE_M = 0.18        # m; MEASURED with tools/replay on junction_1-3 (medians 0.175, 0.195, 0.173): from where the flare test fires to the junction centre (it fires ~0.1 m past where the widening starts at ~0.28 m)
 ZONE_PAUSE_S = 2.0              # s stopped at each zone change, for the judge
 QUIZ_EXIT_M = 0.4               # m past the centre at which QUIZ_INTERSECTION goes back to IDLE

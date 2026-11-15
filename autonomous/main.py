@@ -299,7 +299,8 @@ def _location(sys, vision, now):
         return None
     evidence = vision.location if vision is not None else None
     speed = sys.last_drive.speed if sys.last_drive is not None else 0.0
-    return sys.locator.update(evidence, speed, now)
+    sign = vision.sign if vision is not None else None
+    return sys.locator.update(evidence, speed, now, sign)
 
 
 def _read_commands(commands):

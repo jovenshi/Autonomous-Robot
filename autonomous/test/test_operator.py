@@ -215,8 +215,8 @@ def ready(tmp_path, render=None, **kw):
     return ann, player
 
 
-def loc(zone):
-    return LocationObs(zone, False, False, False, None, 1.0, "dead_reckoning", 0.0)
+def loc(zone, dist=0.5):
+    return LocationObs(zone, False, False, False, dist, 1.0, "dashes", 0.0)
 
 
 def vote(sign):
@@ -248,16 +248,28 @@ def test_new_voted_sign_is_spoken_once(tmp_path):
 
 
 def test_zone_changes_are_spoken_in_order(tmp_path):
+    # The first zone of a pass (Continue travel, before Read the sign) is the
+    # baseline, not news; no pass at all is silent.
     ann, player = ready(tmp_path)
-    for i, zone in enumerate((Zone.READ_SIGN, Zone.READ_SIGN, Zone.PAUSE, Zone.ENTERING)):
+    ann.update(bare_packet(location=loc(Zone.CONTINUE, None)), 8.0)       # no pass yet
+    zones = (Zone.CONTINUE, Zone.READ_SIGN, Zone.READ_SIGN, Zone.PAUSE, Zone.ENTERING)
+    for i, zone in enumerate(zones):
         ann.update(bare_packet(location=loc(zone)), 10.0 + 2 * i)
     ann.update(bare_packet(location=None), 20.0)
     assert player.played == ["zone_READ_SIGN", "zone_PAUSE", "zone_ENTERING"]
 
 
+def test_a_pass_starting_mid_zone_is_not_announced_until_it_changes(tmp_path):
+    ann, player = ready(tmp_path)
+    ann.update(bare_packet(location=loc(Zone.READ_SIGN)), 10.0)
+    ann.update(bare_packet(location=loc(Zone.PAUSE)), 12.0)
+    assert player.played == ["zone_PAUSE"]
+
+
 def test_phrases_never_overlap(tmp_path):
     # Zone and sign in one packet: the sign waits for the zone's length + gap.
     ann, player = ready(tmp_path)
+    ann.update(bare_packet(location=loc(Zone.CONTINUE)), 9.0)            # pass baseline
     packet = bare_packet(location=loc(Zone.READ_SIGN), sign_vote=vote(SignType.RIGHT))
     ann.update(packet, 10.0)
     assert player.played == ["zone_READ_SIGN"]
@@ -269,6 +281,7 @@ def test_phrases_never_overlap(tmp_path):
 
 def test_newer_value_replaces_one_still_waiting(tmp_path):
     ann, player = ready(tmp_path)
+    ann.update(bare_packet(location=loc(Zone.CONTINUE)), 9.0)            # pass baseline
     ann.update(bare_packet(location=loc(Zone.READ_SIGN)), 10.0)
     ann.update(bare_packet(location=loc(Zone.READ_SIGN), sign_vote=vote(SignType.LEFT)), 10.1)
     ann.update(bare_packet(location=loc(Zone.READ_SIGN), sign_vote=vote(SignType.RIGHT)), 10.2)

@@ -29,9 +29,9 @@ import numpy as np
 from robot_types import State, UiCommand
 from ui.announcer import Announcer
 from ui.gamepad import Gamepad, start_or_stop
-from ui.overlay import (AMBER, BG, GREEN, LINE, MUTED, PANEL, RED, TEXT, draw_front_overlay,
-                        draw_no_data, draw_side_overlay, draw_sign_overlay, draw_sign_panel,
-                        mark_stale)
+from ui.overlay import (AMBER, BG, GREEN, LINE, MUTED, PANEL, RED, TEXT, draw_annotations,
+                        draw_front_overlay, draw_no_data, draw_side_overlay, draw_sign_overlay,
+                        draw_sign_panel, mark_stale)
 from ui.panels import (History, draw_banner, draw_chart, draw_header, draw_lane_gauge,
                        draw_preflight, draw_status, draw_steer_bar, preflight)
 from tools.calib_status import check_status
@@ -174,6 +174,8 @@ class Screen:
         scale = size[0] / result.view.shape[1]
         if kind == "front":
             draw_front_overlay(img, result, scale)
+            if result.location is not None:          # crossing line, flare, dashes
+                draw_annotations(img, result.location.annotations, scale)
             draw_sign_overlay(img, self._fresh_sign(),
                               packet.sign_vote if packet is not None else None, self.cfg, scale)
         else:

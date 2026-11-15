@@ -8,7 +8,10 @@ flushes the rest.
 
 An empty cell means "not measured this loop". yaw_deg and yaw_rate_dps come
 from the fresh IMU sample (empty when missing or stale); the controller used
-yaw_rate_dps for damping only when imu_valid is 1.
+yaw_rate_dps for damping only when imu_valid is 1. mode is the RunMode;
+zone, s (m from the junction centre, negative before) and loc_source come
+from the LocationObs, empty with no junction pass under way; sign is the
+voted sign.
 
 tools/weave_report.py reads these files.
 """
@@ -17,7 +20,8 @@ import datetime
 import os
 
 COLUMNS = ("t", "state", "lateral_err_m", "heading_err_rad", "lane_conf",
-           "yaw_deg", "yaw_rate_dps", "imu_valid", "steer", "speed")
+           "yaw_deg", "yaw_rate_dps", "imu_valid", "steer", "speed",
+           "mode", "zone", "s", "loc_source", "sign")
 GAINS = ("KD_YAW", "KP_LAT", "KH", "CRUISE_SPEED")
 
 
@@ -37,8 +41,9 @@ class LoopLog:
         self._writer = csv.writer(self._file)
         self._writer.writerow(COLUMNS)
 
-    def write(self, now, state, lane, imu, drive):
-        # lane: LaneEstimate; imu: fresh ImuSample or None; drive: DriveCmd.
+    def write(self, now, state, lane, imu, drive, mode=None, location=None, vote=None):
+        # lane: LaneEstimate; imu: fresh ImuSample or None; drive: DriveCmd;
+        # mode: RunMode; location: LocationObs or None; vote: SignVote or None.
         self._writer.writerow((
             f"{now:.4f}", state.name,
             _cell(lane.lateral_err_m), _cell(lane.heading_err_rad), _cell(lane.conf),
@@ -46,6 +51,7 @@ class LoopLog:
             _cell(imu.yaw_rate_dps if imu is not None else None),
             int(imu is not None and imu.valid),
             _cell(drive.steer), _cell(drive.speed),
+            *_quiz_cells(mode, location, vote),
         ))
 
     def close(self):
@@ -53,6 +59,16 @@ class LoopLog:
         if self._file is not None:
             self._file.close()
             self._file = None
+
+
+def _quiz_cells(mode, location, vote):
+    # mode, zone, s, loc_source, sign
+    in_pass = location is not None and location.dist_to_centre_m is not None
+    return (mode.name if mode is not None else "",
+            location.zone.name if in_pass else "",
+            _cell(-location.dist_to_centre_m) if in_pass else "",
+            location.source if in_pass else "",
+            vote.sign.name if vote is not None else "")
 
 
 def _cell(x):

@@ -1,8 +1,9 @@
 """Robot entry point: build the system, run the 30 Hz control loop, shut down.
 
-Straight-driving build: front camera, IMU, lane fusion, road yaw, lane
-controller, behaviour (IDLE / LANE_FOLLOW / SAFE_STOP) and the Sabertooth.
-The side camera, sign voter and display are added as they are written.
+Front camera, IMU, lane fusion, road yaw, lane controller, sign voter,
+junction location (LocationTracker), behaviour, display and the Sabertooth.
+Modes: DRIVE (straight driving), QUIZ_INTERSECTION (drive through the
+junction reporting each zone, docs/quiz3_plan.md stage 6), QUIZ_SIGNS.
 
 Run from the robot/ folder:  python main.py
     Enter            START  (again after SAFE_STOP: once to IDLE, once to drive)
@@ -27,6 +28,7 @@ from control.lane_controller import LaneController
 from control.mixer import mix
 from estimation.health import check_health
 from estimation.lane_fusion import fuse_lane, is_fresh
+from estimation.location import LocationTracker
 from estimation.road_yaw import RoadYawTracker
 from hal.camera import CameraStream, CsiSource
 from hal.exposure import ExposureControl
@@ -57,6 +59,7 @@ class System:
     behaviour: Behaviour
     commands: queue.Queue
     voter: object = None                  # SignVoter; None in tests without one
+    locator: object = None                # LocationTracker; None in tests without one
     imu: object = None                    # ImuReader; None in tests without one
     imu_slot: LatestValue = field(default_factory=LatestValue)
     loop_log: object = None               # LoopLog, or None when LOOP_LOG_ENABLED is off
@@ -67,7 +70,7 @@ class System:
     prev_state: State = State.IDLE
     overrun_times: deque = field(default_factory=deque)
     last_warnings: tuple = ()
-    last_seen: tuple = (None, None)       # (mode, voted sign) last printed
+    last_seen: tuple = (None, None, None) # (mode, voted sign, zone) last printed
     last_status_t: float = 0.0
     last_drive: object = None
 
@@ -101,7 +104,8 @@ def build_system(cfg):
         exposure_hold=exposure_hold, front_cam=front_cam, front_exposure=front_exposure,
         saber=saber, lane_ctrl=LaneController(cfg), road_yaw=RoadYawTracker(cfg),
         behaviour=Behaviour(cfg, signs_enabled, exposure_hold, drift_request),
-        commands=commands, voter=SignVoter(cfg), imu=imu, imu_slot=imu_slot,
+        commands=commands, voter=SignVoter(cfg), locator=LocationTracker(cfg),
+        imu=imu, imu_slot=imu_slot,
         loop_log=_open_loop_log(cfg),
         ui_process=ui[0], ui_packet_q=ui[1], ui_cmd_q=ui[2],
     )
@@ -184,26 +188,30 @@ def control_step(sys, now):
     warnings = check_health(front, None, imu_raw, lane, road_yaw, fps,
                             overruns, sys.saber.serial_error, now, cfg)
     vote = _sign_vote(sys, front, now)
+    location = _location(sys, front, now)
     state = sys.behaviour.step(front, None, lane, road_yaw, vote, imu_raw, commands,
-                               sys.saber.serial_error, now)
+                               sys.saber.serial_error, now, location)
     if not sys.signs_enabled.is_set():
         vote = _sign_vote(sys, front, now)           # sign reading went off this loop: clear
     if state in _LANE_STATES and state != sys.prev_state:
         sys.lane_ctrl.reset()
+    if sys.prev_state == State.IDLE and state != State.IDLE and sys.locator is not None:
+        sys.locator.reset()                          # each run starts its own junction pass
 
     drive = drive_for_state(state, lane, imu, sys.behaviour, sys.lane_ctrl, front, cfg, road_yaw)
     motor = mix(drive, cfg)
     sys.saber.set(motor)                             # every loop, or the timeout stops the motors
     sys.last_drive = drive
+    quiz_location = sys.behaviour.location           # None outside QUIZ_INTERSECTION
     if sys.loop_log is not None:
-        sys.loop_log.write(now, state, lane, imu, drive)
+        sys.loop_log.write(now, state, lane, imu, drive, sys.behaviour.mode, location, vote)
     if sys.ui_packet_q is not None:
         include_views = sys.ui_loops % cfg.UI_IMAGE_EVERY == 0
         sys.ui_loops += 1
         send(sys.ui_packet_q, make_ui_packet(sys, now, drive, motor, lane, road_yaw, imu_raw,
                                              vote, fps, overruns, warnings, front, None,
-                                             include_views))
-    _report(sys, state, lane, imu, road_yaw, warnings, now, vote)
+                                             include_views, quiz_location))
+    _report(sys, state, lane, imu, road_yaw, warnings, now, vote, quiz_location)
     sys.prev_state = state
 
 
@@ -219,6 +227,17 @@ def _sign_vote(sys, front, now):
     if front is not None and front.sign is not None and is_fresh(front.sign, now, sys.cfg):
         sys.voter.add(front.sign)
     return sys.voter.decided()
+
+
+def _location(sys, front, now):
+    # The newest LocationObs from the front camera's evidence, moved on by
+    # last loop's speed command where the dashes can't be matched; None
+    # without a tracker.
+    if sys.locator is None:
+        return None
+    evidence = front.location if front is not None else None
+    speed = sys.last_drive.speed if sys.last_drive is not None else 0.0
+    return sys.locator.update(evidence, speed, now)
 
 
 def _read_commands(commands):
@@ -237,15 +256,20 @@ def _recent_overruns(sys, now):
     return len(sys.overrun_times)
 
 
-def _report(sys, state, lane, imu, road_yaw, warnings, now, vote=None):
-    # Terminal output: state, mode, voted sign and warning changes at once,
-    # a status line every STATUS_PRINT_S.
-    seen = (sys.behaviour.mode, vote.sign if vote is not None else None)
+def _report(sys, state, lane, imu, road_yaw, warnings, now, vote=None, location=None):
+    # Terminal output: state, mode, voted sign, zone and warning changes at
+    # once, a status line every STATUS_PRINT_S.
+    in_pass = location is not None and location.dist_to_centre_m is not None
+    seen = (sys.behaviour.mode, vote.sign if vote is not None else None,
+            location.zone if in_pass else None)
     if seen != sys.last_seen:
         if seen[0] != sys.last_seen[0]:
             print(f"Mode: {sys.cfg.MODE_LABELS[seen[0].name]}")
         if seen[1] != sys.last_seen[1]:
             print("Sign: " + (sys.cfg.SIGN_PHRASES[seen[1].name] if seen[1] else "none"))
+        if seen[2] != sys.last_seen[2] and None not in (seen[2], sys.last_seen[2]):
+            # a change from one zone to the next; the first zone of a pass is not news
+            print(f"Zone: {sys.cfg.ZONE_PHRASES[seen[2].name]}  ({_where(location)})")
         sys.last_seen = seen
     if state != sys.prev_state:
         reason = f" ({sys.behaviour.stop_reason})" if sys.behaviour.stop_reason else ""
@@ -258,6 +282,13 @@ def _report(sys, state, lane, imu, road_yaw, warnings, now, vote=None):
         print(_status_line(sys, state, lane))
         print("  " + _imu_line(imu, road_yaw, now))
         sys.last_status_t = now
+
+
+def _where(location):
+    # "s -0.27 m, dashes"
+    if location.dist_to_centre_m is None:
+        return "no junction"
+    return f"s {-location.dist_to_centre_m:+.2f} m, {location.source}"
 
 
 def _status_line(sys, state, lane):

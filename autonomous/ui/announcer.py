@@ -6,6 +6,10 @@ text-to-speech uses). Each file is named after its text, so a phrase changed in
 config.py is rendered again and an unchanged one is reused from the last run.
 Playback goes through the course's USB_SoundController (not modified).
 
+A zone is spoken when it changes from one zone to the next within a pass;
+the first zone of a pass (Continue travel, before Read the sign) is not
+news. A voted sign is spoken whenever it appears or changes.
+
 One phrase at a time: USB_SoundController starts each sound at once on a free
 channel, so two phrases asked for together would talk over each other. The
 announcer queues them, keeps at most one waiting per kind (a newer zone
@@ -58,8 +62,9 @@ class Announcer:
         if not self.enabled or self.player is None or packet is None:
             return
         location, vote = packet.location, packet.sign_vote
-        self._note("zone", location.zone if location is not None else None)
-        self._note("sign", vote.sign if vote is not None else None)
+        in_pass = location is not None and location.dist_to_centre_m is not None
+        self._note("zone", location.zone if in_pass else None, speak_first=False)
+        self._note("sign", vote.sign if vote is not None else None, speak_first=True)
         self._play_next(now)
 
     def close(self):
@@ -68,12 +73,16 @@ class Announcer:
             self.player.close()
             self.player = None
 
-    def _note(self, kind, value):
-        # A new zone or voted sign queues its phrase; None (no zone, vote
+    def _note(self, kind, value, speak_first):
+        # A new zone or voted sign queues its phrase; None (no pass, vote
         # cleared) is silent but lets the same value be spoken again later.
-        if value == self.last[kind]:
+        # speak_first False: a value right after None only sets the baseline.
+        previous = self.last[kind]
+        if value == previous:
             return
         self.last[kind] = value
+        if previous is None and not speak_first:
+            return
         key = (kind, value.name) if value is not None else None
         if key in self.clips:
             self.pending = [p for p in self.pending if p[0] != kind] + [key]

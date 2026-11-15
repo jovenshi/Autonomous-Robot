@@ -48,24 +48,45 @@ def draw_header(img, rect, packet):
 
 def draw_banner(img, rect, packet, cfg):
     # The run mode on every view ("Sign Reading", ...), and on the right
-    # the voted sign.
+    # the zone during a junction pass (intersection quiz), else the voted sign.
     x, y, w, h = rect
     img[y:y + h, x:x + w] = PANEL
     cv2.line(img, (x, y + h - 1), (x + w, y + h - 1), LINE, 1)
     if packet is None:
         return
     draw_text(img, cfg.MODE_LABELS[packet.mode.name], (x + 12, y + h - 9), 20, TEXT, bold=True)
+    zone = zone_label(packet, cfg)
+    if zone is not None:
+        draw_text(img, zone, (x + w - 12, y + h - 9), 20, YELLOW, bold=True, align="right")
+        return
     vote = packet.sign_vote
     if vote is not None:
         draw_text(img, f"Sign: {cfg.SIGN_PHRASES[vote.sign.name]}", (x + w - 12, y + h - 9), 20,
                   GREEN, bold=True, align="right")
 
 
+def zone_label(packet, cfg):
+    # "Zone: Turn zone" during a junction pass, else None.
+    loc = packet.location
+    if loc is None or loc.dist_to_centre_m is None:
+        return None
+    return f"Zone: {cfg.ZONE_PHRASES[loc.zone.name]}"
+
+
 def quiz_rows(packet, cfg):
     vote = packet.sign_vote
-    return [("mode", cfg.MODE_LABELS[packet.mode.name], TEXT),
+    rows = [("mode", cfg.MODE_LABELS[packet.mode.name], TEXT),
             ("sign", cfg.SIGN_PHRASES[vote.sign.name] if vote is not None else "none",
              GREEN if vote is not None else MUTED)]
+    loc = packet.location
+    if loc is None:
+        return rows
+    if loc.dist_to_centre_m is None:
+        return rows + [("zone", "no junction yet", MUTED)]
+    return rows + [("zone", cfg.ZONE_PHRASES[loc.zone.name], YELLOW),
+                   ("s (from centre)", f"{-loc.dist_to_centre_m:+.2f} m", TEXT),
+                   ("location from", loc.source, TEXT),
+                   ("location conf", f"{loc.conf:.2f}", TEXT if loc.conf >= 0.5 else AMBER)]
 
 
 def draw_lane_gauge(img, rect, lane, cfg):

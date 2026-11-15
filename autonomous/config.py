@@ -155,8 +155,6 @@ RED_S_MIN = 100
 
 # ---------------------------------------------------------------- junctions and signs
 
-APPROACH_ON = 0.6               # score; hysteresis with APPROACH_OFF
-APPROACH_OFF = 0.3
 CROSS_LINE_MIN_FRAC = 0.3       # fraction of width the crossing line's dashes cover once their gaps are closed; TUNED on the signs_* frames (0.32 at 1.6 m, 0.36-0.65 nearer)
 CROSS_ROAD_EXTRA_M = 0.15       # m; the road under the crossing line must be this much wider than ROAD_WIDTH_M (the cross road: +0.28 off-centre; our road with a seam: +0.06)
 CROSS_ROAD_CHECK_PX = 10        # px (lane size); rows either side of the crossing line that must be that road (a mat seam is 2-3)
@@ -184,7 +182,6 @@ DASH_MIN_MATCHES = 2            # dashes that must agree on the shift
 DASH_COLOUR = (60, 255, 120)    # BGR annotation colour of a dash centre
 CROSS_LINE_COLOUR = (0, 215, 255)   # BGR annotation colours: crossing line,
 FLARE_COLOUR = (230, 120, 255)      # where the road starts to widen
-STOP_LINE_Y_FRAC = 0.85         # fraction of height
 SIDE_GREEN_MIN_FRAC = 0.2       # fraction
 SIGN_HZ = 10                    # Hz
 # (x, y, w, h) in FRONT_LANE_SIZE px; a candidate's centre must lie inside.

@@ -4,13 +4,21 @@ step() runs once per control loop: commands first (START, STOP), then
 safety, then the current state's handler. drive_for_state() turns the
 resulting state into a DriveCmd.
 
-Working now: IDLE, LANE_FOLLOW, SAFE_STOP (straight driving).
-APPROACH, DECIDE, STOP_HOLD, TURN, CROSS and REACQUIRE raise until their
-inputs exist (location.py, signs.py, sign_voter.py, the IMU reader).
+Working now: IDLE, LANE_FOLLOW, SAFE_STOP (straight driving), and for the
+intersection quiz (RunMode.QUIZ_INTERSECTION, docs/quiz3_plan.md stage 6)
+APPROACH, CROSS and REACQUIRE, driven by the LocationObs:
+    LANE_FOLLOW -> APPROACH in READ_SIGN and PAUSE
+                -> CROSS (hold_steer on road_yaw) in ENTERING, TURN, EXITING
+                -> REACQUIRE in CONTINUE after the junction
+                -> IDLE once QUIZ_EXIT_M past the centre.
+At every zone change while moving, `paused` is set for ZONE_PAUSE_S
+(drive_for_state stops the robot) so the judge can check the zone. In DRIVE
+mode the robot stays in LANE_FOLLOW as before; QUIZ_SIGNS stays in IDLE.
+DECIDE, STOP_HOLD and TURN raise (out of scope for Quiz 3).
 choose_action is complete, ready for DECIDE.
 """
 from estimation.road_yaw import off_road_deg
-from robot_types import Action, RunMode, SignType, State, UiCommand
+from robot_types import Action, RunMode, SignType, State, UiCommand, Zone
 
 _MODE_COMMANDS = {UiCommand.MODE_DRIVE: RunMode.DRIVE,
                   UiCommand.MODE_INTERSECTION: RunMode.QUIZ_INTERSECTION,
@@ -23,6 +31,9 @@ _MOVING_STATES = _LANE_STATES + (State.TURN, State.CROSS)
 _IMU_STEER_STATES = (State.TURN, State.CROSS)
 # States where the robot stands still long enough to measure gyro drift.
 _STILL_STATES = (State.IDLE, State.STOP_HOLD)
+# Intersection quiz: the state each zone of a pass calls for.
+_APPROACH_ZONES = (Zone.READ_SIGN, Zone.PAUSE)
+_CROSS_ZONES = (Zone.ENTERING, Zone.TURN, Zone.EXITING)
 
 
 class Behaviour:
@@ -41,10 +52,21 @@ class Behaviour:
         self._start_requested = False
         self._lane_seen_t = 0.0
         self._recover_t = None             # when the current pivot back to the road began
+        self.location = None               # newest LocationObs (intersection quiz only)
+        self.paused = False                # judging pause: drive_for_state stops the robot
+        self._zone = None                  # zone last seen, for the judging pause
+        self._pause_until = None
+        self._last_step_t = None
+        self._moving_s = 0.0               # time in this state not spent paused
+        self._reacquire_run = 0            # loops in a row with lane conf >= REACQUIRE_CONF
         self._enter(State.IDLE, 0.0)
 
-    def step(self, front, side, lane, road_yaw, sign, imu, commands, motor_error, now):
-        # commands: list of UiCommand; motor_error: SabertoothDriver.serial_error.
+    def step(self, front, side, lane, road_yaw, sign, imu, commands, motor_error, now,
+             location=None):
+        # commands: list of UiCommand; motor_error: SabertoothDriver.serial_error;
+        # location: LocationObs (used in QUIZ_INTERSECTION only), or None.
+        self.location = location if self.mode == RunMode.QUIZ_INTERSECTION else None
+        self._update_pause(now)
         if self._apply_commands(commands, now):
             return self.state
         if lane is not None and lane.lateral_err_m is not None:
@@ -116,10 +138,44 @@ class Behaviour:
             return "lane lost"
         return None
 
+    def _update_pause(self, now):
+        # A judging pause of ZONE_PAUSE_S at every zone change while moving,
+        # and the time in this state not spent paused (for CROSS_TIMEOUT_S).
+        # The time since the last step counts as driving only if the robot
+        # was not paused during it.
+        if self._last_step_t is not None and not self.paused:
+            self._moving_s += max(0.0, now - self._last_step_t)
+        self._last_step_t = now
+        zone = self.location.zone if self.location is not None else None
+        if (self.state in _MOVING_STATES and zone is not None and self._zone is not None
+                and zone != self._zone):
+            self._pause_until = now + self.cfg.ZONE_PAUSE_S
+        self._zone = zone
+        self.paused = self._pause_until is not None and now < self._pause_until
+
+    def _quiz_target(self):
+        # The state the intersection quiz calls for at this location, or
+        # None (not in the quiz, or no junction pass under way).
+        loc = self.location
+        if loc is None or loc.dist_to_centre_m is None:
+            return None
+        if loc.turn_point_ready and loc.dist_to_centre_m <= -self.cfg.QUIZ_EXIT_M:
+            return State.IDLE
+        if loc.zone in _APPROACH_ZONES:
+            return State.APPROACH
+        if loc.zone in _CROSS_ZONES:
+            return State.CROSS
+        if loc.turn_point_ready:
+            return State.REACQUIRE
+        return None
+
     def _handler(self, state):
         return {
             State.IDLE: self._on_idle,
             State.LANE_FOLLOW: self._on_lane_follow,
+            State.APPROACH: self._on_approach,
+            State.CROSS: self._on_cross,
+            State.REACQUIRE: self._on_reacquire,
             State.SAFE_STOP: self._on_safe_stop,
         }.get(state, self._not_built)
 
@@ -136,9 +192,42 @@ class Behaviour:
         return State.IDLE
 
     def _on_lane_follow(self, front, side, lane, road_yaw, sign, imu, now):
-        # APPROACH is entered from LocationObs once the junction work is
-        # wired (docs/quiz3_plan.md, stage 6).
+        # Intersection quiz: on to APPROACH (or straight to CROSS, or IDLE
+        # when the run is over) as the location calls for. After REACQUIRE
+        # the robot may be back here before QUIZ_EXIT_M.
+        target = self._quiz_target()
+        if target in (State.APPROACH, State.CROSS, State.IDLE):
+            return target
         return State.LANE_FOLLOW
+
+    def _on_approach(self, front, side, lane, road_yaw, sign, imu, now):
+        # Lane control at APPROACH_SPEED through READ_SIGN and PAUSE; CROSS
+        # from ENTERING. Back to LANE_FOLLOW if the pass is lost.
+        target = self._quiz_target()
+        return State.LANE_FOLLOW if target is None else target
+
+    def _on_cross(self, front, side, lane, road_yaw, sign, imu, now):
+        # hold_steer on road_yaw from ENTERING to the end of EXITING, then
+        # REACQUIRE. After CROSS_TIMEOUT_S of driving (pauses not counted),
+        # or if the pass is lost, REACQUIRE: the lane controller takes over.
+        target = self._quiz_target()
+        if target in (State.REACQUIRE, State.IDLE):
+            return target
+        if target is None or self._moving_s > self.cfg.CROSS_TIMEOUT_S:
+            return State.REACQUIRE
+        return State.CROSS
+
+    def _on_reacquire(self, front, side, lane, road_yaw, sign, imu, now):
+        # Lane control at REACQUIRE_SPEED; IDLE once QUIZ_EXIT_M past the
+        # centre, LANE_FOLLOW after REACQUIRE_FRAMES loops in a row with
+        # lane conf >= REACQUIRE_CONF.
+        if self._quiz_target() == State.IDLE:
+            return State.IDLE
+        confident = lane is not None and lane.conf >= self.cfg.REACQUIRE_CONF
+        self._reacquire_run = self._reacquire_run + 1 if confident else 0
+        if self._reacquire_run >= self.cfg.REACQUIRE_FRAMES:
+            return State.LANE_FOLLOW
+        return State.REACQUIRE
 
     def _on_safe_stop(self, front, side, lane, road_yaw, sign, imu, now):
         # Leaves only on a manual START (handled in _apply_commands).
@@ -153,10 +242,13 @@ class Behaviour:
         self.state = state
         self.state_t = now
         self.stop_reason = reason if state == State.SAFE_STOP else None
+        self._moving_s, self._reacquire_run = 0.0, 0
         if state == State.IDLE:
             self._start_requested = False
-        if state == State.LANE_FOLLOW:
-            self._lane_seen_t = now        # fresh grace period on start
+        if state not in _MOVING_STATES:
+            self._pause_until, self.paused = None, False
+        if state in (State.LANE_FOLLOW, State.REACQUIRE):
+            self._lane_seen_t = now        # fresh grace period on start and after CROSS
         self._set_flag(self.exposure_hold, state != State.LANE_FOLLOW)
         self._set_flag(self.drift_request, state in _STILL_STATES)
         self._set_sign_flag()

@@ -165,14 +165,13 @@ def test_drift_requested_only_in_idle_and_stop_hold(bd, drift, state):
 
 # ---------------------------------------------------------------- junction hook
 
-def test_approach_sets_flags_then_reports_not_built(b, flags):
-    # Nothing enters APPROACH until LocationObs drives it (stage 6); entering
-    # it still sets the camera flags, and its handler is still not built.
+def test_approach_sets_flags(b, flags):
+    # Entering APPROACH switches sign reading and the exposure hold on; with
+    # no junction pass (DRIVE mode) it goes back to LANE_FOLLOW.
     start(b, 1.0)
     b._enter(State.APPROACH, 1.1)
     assert flags[0].is_set() and flags[1].is_set()
-    with pytest.raises(NotImplementedError):
-        step(b, 1.2)
+    assert step(b, 1.2) == State.LANE_FOLLOW
 
 
 def test_lane_follow_stays_without_location(b):

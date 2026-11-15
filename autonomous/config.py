@@ -241,18 +241,23 @@ STOP_HOLD_S = 3.0               # s
 #              (estimation/location.py), at READ_SIGN_LATEST_M if it never is
 #   PAUSE      the robot's front reaches where the corners start to curve
 #   ENTERING   the robot's front reaches the cross road's near edge
-#   TURN       the rear wheels are halfway from that edge to the yellow line
-#   EXITING, CONTINUE  0.04 and 0.18 m past the centre (course zone diagram)
+#   TURN       TURN_ZONE_EARLY_M before the rear wheels are halfway from that
+#              edge to the yellow line
+#   EXITING    0.04 m past the centre (course zone diagram)
+#   CONTINUE   the rear axle reaches where the road stops widening on the far
+#              side, JUNCTION_CORNER_M past the centre
 ROBOT_FRONT_M = 0.33            # m; MEASURED 2026-11-15: rear axle to the front of the robot (redo after adding a front piece)
 JUNCTION_CORNER_M = 0.28        # m before the centre where the road starts to widen into the rounded corners (course diagram; also the flare)
 CROSS_ROAD_EDGE_M = ROAD_WIDTH_M / 2   # m before the centre: the cross road's near edge
+TURN_ZONE_EARLY_M = 0.02        # m; Turn zone starts this much before the halfway point (2026-11-15, on the mat)
 READ_SIGN_LATEST_M = -0.73      # m; READ_SIGN starts here if the sign was never seen leaving the view
 # s at which each zone begins, in driving order: READ_SIGN, PAUSE, ENTERING, TURN, EXITING, CONTINUE.
 ZONE_BOUNDS_M = (READ_SIGN_LATEST_M,
                  -(JUNCTION_CORNER_M + ROBOT_FRONT_M),
                  -(CROSS_ROAD_EDGE_M + ROBOT_FRONT_M),
-                 -CROSS_ROAD_EDGE_M / 2,
-                 0.04, 0.18)
+                 -(CROSS_ROAD_EDGE_M / 2 + TURN_ZONE_EARLY_M),
+                 0.04,
+                 JUNCTION_CORNER_M)
 ZONE_REF_X_M = 0.0              # m ahead of the rear axle of the point whose position decides the zone; 0 = the rear axle (the bounds above are written for it)
 SIGN_CUT_EDGE_PX = 8            # px (full frame); a sign box this close to the view's edge is being cut off
 SIGN_CUT_READINGS = 2           # sign readings in a row with no box, after one at the edge, that mean the sign is cut off
@@ -335,7 +340,7 @@ TURN_HANDOFF_CONF = 0.6         # conf
 VISION_TURN_STEER = 0.3         # steer
 TURN_TIMEOUT_S = 4.0            # s
 HOLD_KP = 0.01                  # steer per deg
-CROSS_TIMEOUT_S = 3.0           # s
+CROSS_TIMEOUT_S = 6.0           # s of driving (judging pauses not counted); CROSS spans 0.76 m (Entering to the end of Exiting), 3.2 s at the 0.235 m/s measured at CROSS_SPEED on 2026-11-15
 
 # ---------------------------------------------------------------- IMU and road yaw
 

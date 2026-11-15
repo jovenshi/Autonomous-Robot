@@ -118,12 +118,12 @@ def test_losing_the_pass(quiz):
 
 def test_reacquire_hands_back_to_lane_follow_and_the_run_still_ends(quiz):
     step(quiz, 1.0, mid(4))
-    step(quiz, 4.0, 0.2)
+    step(quiz, 4.0, B[5] + 0.02)
     assert quiz.state == State.REACQUIRE
     t = 7.0
     for _ in range(config.REACQUIRE_FRAMES):
         t += 0.03
-        state = step(quiz, t, 0.25)
+        state = step(quiz, t, B[5] + 0.05)
     assert state == State.LANE_FOLLOW
     assert step(quiz, t + 0.03, 0.39) == State.LANE_FOLLOW
     assert step(quiz, t + 0.06, config.QUIZ_EXIT_M) == State.IDLE

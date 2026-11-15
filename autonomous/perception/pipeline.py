@@ -1,11 +1,12 @@
 """Camera thread entry points: one call per frame, one result object out.
 
-process_side_frame is added with perception/side_lane.py and location
-evidence with location.py. Signs are read here for now (docs/quiz3_plan.md:
-they move to the vision worker in stage 7).
+process_side_frame is added with perception/side_lane.py. Location evidence
+and signs are read here for now (docs/quiz3_plan.md: they move to the vision
+worker in stage 7).
 """
 from perception.color import make_front_masks
 from perception.front_lane import process_front_lane
+from perception.location import process_location
 from perception.signs import process_signs
 from robot_types import FrontResult
 
@@ -45,9 +46,8 @@ def _read_sign(frame, masks, signs_enabled, sign_model, pacer, cfg):
 
 
 def process_front_frame(frame, signs_enabled, cfg, tracker=None, sign_model=None, pacer=None):
-    # Front thread entry: masks once, then lane, then (when signs_enabled,
-    # at SIGN_HZ) the sign reader. Location is None until
-    # perception/location.py exists.
+    # Front thread entry: masks once, then lane, location evidence and
+    # (when signs_enabled, at SIGN_HZ) the sign reader.
     # tracker: the camera thread's LaneTracker (search window), or None.
     # sign_model: SignModel, or None to report candidates only.
     # pacer: the camera thread's SignPacer, or None to read every frame.
@@ -57,7 +57,7 @@ def process_front_frame(frame, signs_enabled, cfg, tracker=None, sign_model=None
     return FrontResult(
         view=masks.bgr,              # shared with the display; draw on a copy
         lane=lane,
-        location=None,
+        location=process_location(masks, cfg, frame.t, frame.seq),
         sign=sign,
         mean_v=masks.mean_v,
         t=frame.t,

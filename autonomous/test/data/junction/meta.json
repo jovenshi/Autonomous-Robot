@@ -1,0 +1,8 @@
+{
+  "camera": "front",
+  "frame_size": [
+    640,
+    480
+  ],
+  "note": "seq 1-3: approaching a junction, crossing line and flare in view (junction_3 #421, junction_2 #250, signs_none_1 #60); seq 4: inside the junction, crossing line near, far corners must not read as a flare (junction_3 #503); seq 5-7: straights that fooled earlier versions (junction_1 #438 speckled road mask, straight_2 #115 yawed, straight_4 #257 thick mat seam)"
+}

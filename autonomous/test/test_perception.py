@@ -334,7 +334,9 @@ def test_process_front_frame():
     assert isinstance(result, FrontResult)
     assert result.view.shape == (H, W, 3)
     assert (result.t, result.seq) == (3.5, 42)
-    assert result.location is None and result.sign is None
+    assert result.sign is None
+    assert result.location.seq == 42                  # straight road: no junction cue
+    assert result.location.crossing_dist_m is None and result.location.flare_dist_m is None
     assert result.lane.lateral_m == pytest.approx(-0.04, abs=0.003)
     assert 0 < result.mean_v < 255
 

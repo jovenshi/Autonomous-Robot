@@ -285,9 +285,10 @@ def test_no_candidate_is_none_with_roi_annotation(model):
 def test_no_sign_recording_reads_no_sign(model, capsys):
     # Real course frames with the most white clutter: no candidate at all.
     replay.run(NO_SIGN_REC, speed=0, window=False, cfg=config, model=model)
-    lines = capsys.readouterr().out.strip().splitlines()
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("seq")]
     assert len(lines) == 4
     assert all("sign no sign" in line and "no candidate" in line for line in lines)
+    assert all("cross   --  flare   --" in line for line in lines)     # no junction cue either
 
 
 def test_replay_sign_step_and_panel(model):

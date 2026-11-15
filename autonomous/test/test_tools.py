@@ -143,7 +143,7 @@ def test_replay_prints_one_line_per_frame(tmp_path, monkeypatch, capsys):
     rec = tmp_path / "rec"
     make_recording(rec, [0, 20, -20])
     replay.run(str(rec), speed=0, window=False, cfg=config)
-    lines = capsys.readouterr().out.strip().splitlines()
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("seq")]
     assert len(lines) == 3
     steers = [float(line.split("steer ")[1].split()[0]) for line in lines]
     assert steers[0] == pytest.approx(0.0, abs=0.02)

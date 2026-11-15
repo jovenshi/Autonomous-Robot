@@ -32,18 +32,19 @@ FRONT_LENS_POSITION = 2.0       # dioptres (1 / focus distance in m); MEASURED; 
 CAM_READ_RETRY_S = 0.01         # s; pause after a failed read before trying again
 CAM_FPS_WINDOW_S = 1.0          # s; window over which fps() is measured
 
-# MEASURED: 5 bands of (y_top, y_bottom, forward_m from the rear axle,
+# MEASURED: 7 bands of (y_top, y_bottom, forward_m from the rear axle,
 # half_road_px, m_per_px); y values in FRONT_LANE_SIZE pixels.
-# The first 2 bands are EXTRAPOLATED from the 5 measured ones (flat-floor
-# fit), not calibrated; redo tools/calibrate.py with --top-row to replace them.
+# From the 2026-11-15 15:24 board session (9 boards, 0.66-1.17 m, 5 x 4 corners,
+# 36.3 mm squares; 4 mm RMS). Bands 1 and 7 lie just outside the rows the boards
+# covered (extrapolated); bands 2-6 are measured.
 FRONT_BANDS = [
-    (91, 107, 1.6591, 52, 0.003004),
-    (112, 128, 1.3561, 63, 0.002453),
-    (133, 149, 1.1471, 75, 0.002073),
-    (154, 170, 0.9941, 86, 0.001795),
-    (175, 191, 0.8774, 98, 0.001583),
-    (196, 212, 0.7854, 110, 0.001415),
-    (217, 233, 0.7109, 121, 0.00128),
+    (91, 107, 1.2884, 64, 0.002372),
+    (112, 128, 1.0976, 77, 0.001981),
+    (133, 149, 0.9608, 90, 0.001701),
+    (154, 170, 0.8579, 102, 0.001491),
+    (175, 191, 0.7777, 115, 0.001326),
+    (196, 212, 0.7134, 128, 0.001195),
+    (217, 233, 0.6608, 140, 0.001087),
 ]
 
 SIDE_ROWS = (40, 80, 120, 160, 200)  # 5 rows spread over the side frame height
@@ -63,13 +64,17 @@ LANE_SEARCH_MIN_CONF = 0.5      # conf a fit needs before it sets the next windo
 LANE_OUTLIER_M = 0.015          # m; a band point missing the fit by more is dropped
 LANE_MIN_KEEP = 3               # band points always kept, however bad
 LANE_EDGE_WEIGHT = 0.5          # weight of a road-edge point (dash gap) vs a yellow point
-ROAD_WIDTH_M = 0.31             # m, edge to edge; MEASURED (matches the current FRONT_BANDS)
+ROAD_WIDTH_M = 0.305            # m, edge to edge; MEASURED (matches the current FRONT_BANDS)
 
 # MEASURED by tools/calib_ui.py (or tools/calibrate.py fit): written there on APPLY.
 # FRONT_GROUND_H maps FRONT_LANE_SIZE pixels (lens-corrected when the lens
 # values are set) to (forward_m, lateral_m) from the rear axle. Perception
 # uses FRONT_BANDS only; the homography is kept for the pre-session check.
-FRONT_GROUND_H = None           # MEASURED: 3 x 3 nested list
+FRONT_GROUND_H = [
+    [0.000831925, 0.019761384, 18.748112884],
+    [0.038363215, -0.00181753, -5.873573708],
+    [0.000894854, 0.15182491, 1.0],
+]
 FRONT_CAM_MATRIX = None         # MEASURED (lens step, optional): 3 x 3, FRONT_SIZE pixels
 FRONT_DIST_COEFFS = None        # MEASURED (lens step, optional): OpenCV distortion coefficients
 
@@ -78,8 +83,8 @@ FRONT_DIST_COEFFS = None        # MEASURED (lens step, optional): OpenCV distort
 CALIB_DIR = "calibration"       # relative to autonomous/; one folder per session
 CALIB_UI_HZ = 15                # Hz; guided screen redraw (live camera view)
 CALIB_STILL_PX = 1.5            # px; board corners moving less than this per frame count as still
-CALIB_SQUARE_M = 0.025          # m; MEASURED on your print (printers rescale)
-CALIB_PATTERN = (9, 6)          # inner corners (across, along); a 10 x 7-square board
+CALIB_SQUARE_M = 0.0363         # m; MEASURED on the printed docs/calibration_board.pdf (nominal 38 mm; printers rescale)
+CALIB_PATTERN = (5, 4)          # inner corners (across, along); a 6 x 5-square board (fills letter paper)
 CALIB_BAND_COUNT = 5
 CALIB_BAND_FILL = 0.75          # fraction of each band slot a band covers
 CALIB_MIN_FIT_BOARDS = 4        # board photos needed before a fit is allowed
@@ -88,10 +93,10 @@ CALIB_MIN_FIT_BOARDS = 4        # board photos needed before a fit is allowed
 # "check" photo is held back to verify it and becomes the taped check spot.
 # Slide a board until it is fully in view if needed and enter where it really is.
 CALIB_POSITIONS = (
-    (0.72, 0.00, "fit"), (0.72, -0.07, "fit"), (0.72, 0.07, "fit"),
-    (0.82, 0.00, "fit"), (0.92, 0.00, "fit"), (1.02, 0.00, "fit"),
-    (1.12, 0.00, "fit"), (1.12, -0.12, "fit"), (1.12, 0.12, "fit"),
-    (0.87, 0.05, "check"),
+    (0.66, 0.00, "fit"), (0.72, -0.08, "fit"), (0.72, 0.08, "fit"),
+    (0.85, 0.00, "fit"), (0.95, 0.00, "fit"), (1.05, 0.00, "fit"),
+    (1.15, 0.00, "fit"), (1.15, -0.10, "fit"), (1.15, 0.10, "fit"),
+    (0.88, 0.05, "check"),
 )
 CALIB_BOARD_RMS_WARN_M = 0.003  # m; a board fitting worse than this is flagged
 CALIB_BOARD_OFFSET_WARN_M = 0.004   # m; a board's mean miss this large suggests a mis-measured spot
@@ -99,7 +104,7 @@ CALIB_HOLDOUT_TOL_M = 0.005     # m; mean error on the held-back photo for a PAS
 CALIB_CHECK_TOL_M = 0.005       # m; mean error for the pre-session check to PASS
 CALIB_CHECK_MAX_AGE_H = 12      # h; an older PASS shows as "not checked" in the start-up checks
 CALIB_LENS_EDGE_RATIO = 2.0     # edge boards fitting this much worse than centre ones -> lens hint
-CALIB_CHECK_NEAR_M = None       # m; MEASURED: the taped check spot (set on APPLY)
+CALIB_CHECK_NEAR_M = None       # m; MEASURED: the taped check spot (set on APPLY); cleared: the 2026-11-15 spot read ~9 mm off (FAILED), retake the check photo
 CALIB_CHECK_LATERAL_M = None    # m; MEASURED: the taped check spot (set on APPLY)
 CALIB_LENS_MIN_PHOTOS = 12      # lens step: photos needed
 CALIB_LENS_MIN_CELLS = 7        # lens step: of the 3 x 3 image cells, how many corners must reach
@@ -152,7 +157,20 @@ RED_S_MIN = 100
 
 APPROACH_ON = 0.6               # score; hysteresis with APPROACH_OFF
 APPROACH_OFF = 0.3
-CROSS_LINE_MIN_FRAC = 0.5       # fraction of width
+CROSS_LINE_MIN_FRAC = 0.3       # fraction of width the crossing line's dashes cover once their gaps are closed; TUNED on the signs_* frames (0.32 at 1.6 m, 0.36-0.65 nearer)
+CROSS_ROAD_EXTRA_M = 0.15       # m; the road under the crossing line must be this much wider than ROAD_WIDTH_M (the cross road: +0.28 off-centre; our road with a seam: +0.06)
+CROSS_ROAD_CHECK_PX = 10        # px (lane size); rows either side of the crossing line that must be that road (a mat seam is 2-3)
+CROSS_LINE_CLOSE_PX = 61        # px (lane size, odd); dash gaps this wide are closed along a row
+CROSS_LINE_TILT_PX = 4          # px; rows searched either side, so a line tilted by the robot's yaw still counts
+CROSS_LINE_ROAD_PX = 7          # px (lane size); yellow counts for the crossing line only this close to road
+FLARE_STRIP_PX = 4              # px; rows per strip when measuring the road's width
+FLARE_CLOSE_PX = 7              # px (lane size); speckle holes in the road mask this size are closed before widths are measured
+FLARE_MIN_M = 0.10              # m; road this much wider than at the bottom of the view counts as widened; 0.06 fired on a yawed straight (straight_2) and a thick mat seam (straight_4)
+FLARE_WIDE_STRIPS = 3           # widened strips in a row needed (a mat seam is one strip)
+FLARE_NORMAL_STRIPS = 3         # strips at the bottom of the view whose median width is the normal road
+FLARE_BASE_MAX_M = 0.09         # m; the bottom of the view must be at most this much wider than ROAD_WIDTH_M (straights: +0.02-0.06; inside a corner: more)
+CROSS_LINE_COLOUR = (0, 215, 255)   # BGR annotation colours: crossing line,
+FLARE_COLOUR = (230, 120, 255)      # where the road starts to widen
 STOP_LINE_Y_FRAC = 0.85         # fraction of height
 SIDE_GREEN_MIN_FRAC = 0.2       # fraction
 SIGN_HZ = 10                    # Hz
@@ -213,9 +231,13 @@ STOP_HOLD_S = 3.0               # s
 # zone diagram, scaled by ROAD_WIDTH_M; PAUSE starts where the road widens.
 ZONE_BOUNDS_M = (-0.73, -0.28, -0.17, -0.04, 0.04, 0.18)
 ZONE_REF_X_M = 0.0              # m ahead of the rear axle of the point whose position decides the zone; 0 = the rear axle (the pivot)
-FLARE_TO_CENTRE_M = 0.28        # m; MEASURED roughly: where the road starts to widen, to the junction centre
+FLARE_TO_CENTRE_M = 0.18        # m; MEASURED with tools/replay on junction_1-3 (medians 0.175, 0.195, 0.173): from where the flare test fires to the junction centre (it fires ~0.1 m past where the widening starts at ~0.28 m)
 ZONE_PAUSE_S = 2.0              # s stopped at each zone change, for the judge
 QUIZ_EXIT_M = 0.4               # m past the centre at which QUIZ_INTERSECTION goes back to IDLE
+LOCATION_START_FRAMES = 3       # frames in a row with a camera fix before a junction pass begins
+LOCATION_PASS_END_M = 1.0       # m; s at which a pass ends and the tracker waits for the next junction (>= QUIZ_EXIT_M)
+LOCATION_DR_CONF_M = 0.5        # m dead-reckoned since the last camera fix at which LocationObs.conf reaches 0
+LOCATION_BACK_MAX_M = 0.1       # m; a camera fix putting s further back than this in a pass is ignored (the robot only goes forward)
 START_MODE = "DRIVE"            # name of a RunMode member
 SIDE_BOX = None                 # MEASURED: (x, y, w, h) in SIDE_SIZE px whose surface is classified
 VISION_WORKER_ENABLED = False   # False = location and sign work stay in the front camera thread

@@ -63,7 +63,8 @@ def test_deadband_lift_is_continuous_and_full_above_the_ramp():
     assert compensate(0.001, 0.5, cfg) == pytest.approx(0.001 + 0.0025)
     assert compensate(-0.1, 0.5, cfg) == pytest.approx(-0.15)
     unset = ns(STEER_TRIM=None, STEER_DEADBAND=0.0)
-    assert mix(DriveCmd(0.5, 0.1), unset) == mix(DriveCmd(0.5, 0.1), config)   # default: no change
+    unset_mix = mix(DriveCmd(0.5, 0.1), unset)                          # unmeasured: no change
+    assert (unset_mix.left, unset_mix.right) == pytest.approx((0.4, 0.6))
 
 
 def test_speed_scaling_only_when_enabled():

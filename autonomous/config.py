@@ -243,9 +243,9 @@ STOP_HOLD_S = 3.0               # s
 # a tape on the mat (rear axle to the junction centre); on recordings/truth_1
 # the estimate was within 2 cm of the tape before the centre and 2-4 cm
 # behind it from 0 to +0.30.
-READ_SIGN_LATEST_M = -0.83      # m; READ_SIGN starts here if the sign was never seen leaving the view (10 cm earlier than -0.73: 2026-11-15, on the mat)
+READ_SIGN_LATEST_M = -0.93      # m; READ_SIGN starts here if the sign was never seen leaving the view (-0.73, then -0.83, then -0.93: each 10 cm further from the junction, 2026-11-15)
 # s at which each zone begins, in driving order: READ_SIGN, PAUSE, ENTERING, TURN, EXITING, CONTINUE.
-ZONE_BOUNDS_M = (READ_SIGN_LATEST_M, -0.65, -0.55, -0.20, 0.00, 0.30)   # EXITING 15 cm sooner than first measured (2026-11-15, on the mat)
+ZONE_BOUNDS_M = (READ_SIGN_LATEST_M, -0.65, -0.55, -0.20, -0.05, 0.30)  # EXITING 20 cm sooner than first measured (15 cm on the mat, then 5 cm more, 2026-11-15)
 JUNCTION_CORNER_M = 0.28        # m before the centre where the road starts to widen into the rounded corners (course diagram; also the flare)
 ZONE_REF_X_M = 0.0              # m ahead of the rear axle of the point whose position decides the zone; 0 = the rear axle (the bounds above are written for it)
 SIGN_CUT_EDGE_PX = 8            # px (full frame); a sign box this close to the view's edge is being cut off
@@ -329,7 +329,7 @@ TURN_ANGLE_DEG = 90             # deg
 ADVANCE_AFTER_OPENING_S = 0.4   # s; MEASURED on the course
 ADVANCE_AFTER_LINE_S = 0.8      # s; MEASURED on the course
 TURN_KP = 0.02                  # steer per deg
-TURN_MIN_STEER = 0.25           # steer
+TURN_MIN_STEER = 0.053          # steer
 TURN_TOL_DEG = 3                # deg
 TURN_HANDOFF_DEG = 15           # deg
 TURN_HANDOFF_CONF = 0.6         # conf
@@ -379,14 +379,14 @@ MOTOR_DEADBAND = 0.15           # 0-1; software lift so small commands still mov
 # ---------------------------------------------------------------- steering response (tools/steer_test.py)
 # MEASURED by the steering test and written there on APPLY. Per-speed values
 # are {speed: value} dicts (speed 0-1), interpolated between speeds.
-STEER_YAW_DPS_PER_UNIT = None   # MEASURED: {speed: deg/s per unit steer}; sim and gain choice
-STEER_DEADBAND = 0.0            # MEASURED: steer the robot needs before it turns while driving; mix()
+STEER_YAW_DPS_PER_UNIT = {0.0: 297.0, 0.3: 397.41, 0.5: 205.26, 0.7: 106.3} # MEASURED: {speed: deg/s per unit steer}; sim and gain choice
+STEER_DEADBAND = 0.063          # MEASURED: steer the robot needs before it turns while driving; mix()
 STEER_DEADBAND_RAMP = 0.02      # steer over which the deadband lift is blended in (no twitch at 0)
-STEER_TRIM = None               # MEASURED: {speed: steer that drives straight}; mix()
-MOTOR_DEAD_TIME_S = None        # MEASURED: s from command to first movement; sim
-MOTOR_LAG_S = None              # MEASURED: s, first-order time constant of the yaw response; sim
+STEER_TRIM = {0.3: -0.0031, 0.5: 0.0083, 0.7: 0.0305} # MEASURED: {speed: steer that drives straight}; mix()
+MOTOR_DEAD_TIME_S = 0.054       # MEASURED: s from command to first movement; sim
+MOTOR_LAG_S = 0.07              # MEASURED: s, first-order time constant of the yaw response; sim
 CAMERA_LATENCY_S = None         # MEASURED: s from motion to the lane estimate in the loop; sim
-SPEED_MPS_PER_UNIT = None       # MEASURED: forward m/s per unit of speed command; sim, lane filter
+SPEED_MPS_PER_UNIT = 0.926      # MEASURED: forward m/s per unit of speed command; sim, lane filter
 STEER_TEST_SPEEDS = (0.3, 0.5, 0.7)        # driving speeds tested (speed 0 = pivot is always tested)
 STEER_TEST_STEERS = (0.05, 0.1, 0.2, 0.3)  # steer sizes; each is run left then right
 STEER_TEST_LEAD_S = 0.7         # s straight before each steer pair (baseline)
@@ -430,7 +430,19 @@ PS5_BUTTONS = {
     "reqTriangle": "MODE_INTERSECTION",
     "reqCircle": "MODE_DRIVE",
     "reqOptions": "NEXT_VIEW",
+    "reqArrowUp": "RECORD",      # record the run and START it; again: STOP (ends both)
 }
+# Driving by hand while stopped (IDLE or SAFE_STOP, so in every mode, and all the time
+# in Sign Reading): R2 = throttle, L2 = reverse, left stick X = steering, exactly as
+# manual/robot_controller.py (manual/manual_drive.py). Autonomous driving ignores them.
+MANUAL_DRIVE_ENABLED = True
+MANUAL_INPUT_TIMEOUT_S = 0.4    # s; no controller reading this recent -> motors stop at once
+# Run recordings (D-pad Up, r on the screen keyboard, r + Enter in the terminal): front
+# camera frames (and side, if running) in the tools/record.py format, so tools/replay.py
+# and the tuning tools read them. Frame times match the loop log's t column.
+RECORD_DIR = "recordings"       # relative to autonomous/; one folder per recording
+RECORD_PNG_LEVEL = 1            # PNG compression 0-9 (1 = fast)
+RECORD_QUEUE = 60               # frames buffered per camera before frames are skipped
 AUDIO_ENABLED = True
 AUDIO_VOLUME = 0.7              # 0-1
 AUDIO_DIR = "audio"             # relative to autonomous/; phrases rendered to WAV at start-up

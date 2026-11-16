@@ -24,6 +24,11 @@ With no desktop (SSH, VS Code remote), --save writes the same picture for
 every --step-th frame as a JPEG in that folder: open the folder in the
 editor to look.
 
+--screen plays it on the robot's own 7" display instead (front and side
+camera with annotations, the run's telemetry and a timeline, touch
+controls): tools/replay_screen.py. With --screen the recording may be left
+out to pick one on the screen.
+
 Keys: space pause/resume, n next frame while paused, q or Esc quit.
 """
 import argparse
@@ -197,7 +202,10 @@ def run(rec_dir, speed, window, cfg, model=None, save_dir=None, step=1):
 
 def main():
     p = argparse.ArgumentParser(description="Replay a recording with the motors stubbed.")
-    p.add_argument("recording", help="folder made by tools/record.py")
+    p.add_argument("recording", nargs="?", default=None,
+                   help="folder made by tools/record.py or RECORD (optional with --screen)")
+    p.add_argument("--screen", action="store_true",
+                   help="play on the robot's display with both cameras and telemetry")
     p.add_argument("--speed", type=float, default=1.0,
                    help="playback speed (1 = real time, 0 = as fast as possible)")
     p.add_argument("--no-window", action="store_true", help="print only")
@@ -206,6 +214,12 @@ def main():
                    help="write a picture per frame here instead of opening a window")
     p.add_argument("--step", type=int, default=1, help="use every n-th frame")
     args = p.parse_args()
+    if args.screen:
+        from tools import replay_screen
+        replay_screen.main(([args.recording] if args.recording else []) + ["--model", args.model])
+        return
+    if args.recording is None:
+        p.error("the recording folder is needed (or use --screen to pick one)")
     window = not args.no_window and args.save is None
     run(args.recording, 0.0 if args.save else args.speed, window, config,
         open_model(args.model, config), args.save, args.step)

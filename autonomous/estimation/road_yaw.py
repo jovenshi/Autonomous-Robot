@@ -6,6 +6,12 @@ road_yaw, so gyro drift only matters since the last anchor.
 
 Yaw values are the IMU's unwrapped degrees (+ = left), so no wrap handling
 is needed.
+
+The road is forgotten when a run starts (reset): between runs the robot may
+be carried or driven by hand onto any road, facing either way, so the last
+run's road means nothing. Within a run it is kept through every junction:
+after_turn turns it with the robot, and the camera re-anchors it on the new
+road, so a run can turn and carry on for as long as it lasts.
 """
 import math
 
@@ -42,6 +48,12 @@ class RoadYawTracker:
         else:
             self._yaw_deg += self.cfg.ROAD_YAW_ALPHA * (measured - self._yaw_deg)
         self._t_anchor = now
+
+    def reset(self):
+        # A new run: no road until the camera anchors one (off_road_deg is
+        # None until then, so the robot never pivots towards an old road).
+        self._yaw_deg = None
+        self._t_anchor = 0.0
 
     def after_turn(self, direction):
         # direction +1 = left, -1 = right. New road = old +/- TURN_ANGLE_DEG,

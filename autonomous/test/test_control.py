@@ -106,8 +106,8 @@ def test_lost_lane_holds_last_steer(no_smoothing):
 
 def test_turn_steer_direction_and_floor():
     assert turn_steer(0.0, 90.0, config) == 1.0                    # big error, clamped
-    assert turn_steer(0.0, 5.0, config) == config.TURN_MIN_STEER   # small error, floored
-    assert turn_steer(0.0, -5.0, config) == -config.TURN_MIN_STEER
+    assert turn_steer(0.0, 1.0, config) == config.TURN_MIN_STEER   # small error, floored
+    assert turn_steer(0.0, -1.0, config) == -config.TURN_MIN_STEER
     assert turn_steer(10.0, 10.0, config) == 0.0
 
 
@@ -179,7 +179,22 @@ def test_lane_steer_keeps_inner_wheel_forward(no_smoothing):
                             LaneController(config), None, config)
     assert drive.steer == pytest.approx(config.LANE_STEER_SPEED_RATIO * drive.speed)
     motors = mix(drive, config)
-    assert motors.left > 0 and motors.right > 0
+    assert motors.left >= 0 and motors.right > 0       # inner wheel never reverses (deadband lift capped)
+
+
+def test_deadband_never_reverses_the_inner_wheel(monkeypatch):
+    # At the arc limit (inner wheel just rolling) the deadband lift and trim
+    # are capped; below it they apply in full; pivots are not capped.
+    monkeypatch.setattr(config, "STEER_DEADBAND", 0.063)
+    monkeypatch.setattr(config, "STEER_TRIM", {0.3: 0.02})
+    for speed in (0.2, 0.3, 0.5):
+        for sign in (1, -1):
+            m = mix(DriveCmd(speed, sign * config.LANE_STEER_SPEED_RATIO * speed), config)
+            assert min(m.left, m.right) >= 0
+    # 0.05 steer + 0.02 trim (held above 0.3) + 0.063 deadband: well inside the cap
+    assert mix(DriveCmd(0.5, 0.05), config).left == pytest.approx(0.5 - (0.05 + 0.02 + 0.063))
+    pivot = mix(DriveCmd(0.0, 0.1), config)
+    assert pivot.right - pivot.left == pytest.approx(2 * (0.1 + 0.063))
 
 
 def test_turn_is_out_of_scope():
@@ -215,14 +230,21 @@ def test_judging_pause_stops_every_moving_state(no_smoothing):
 
 # ---------------------------------------------------------------- mixer
 
-def test_mix_straight_and_left():
+@pytest.fixture
+def uncorrected(monkeypatch):
+    # The mixing arithmetic alone: no measured trim or deadband.
+    monkeypatch.setattr(config, "STEER_TRIM", None)
+    monkeypatch.setattr(config, "STEER_DEADBAND", 0.0)
+
+
+def test_mix_straight_and_left(uncorrected):
     straight = mix(DriveCmd(0.5, 0.0), config)
     assert (straight.left, straight.right) == (0.5, 0.5)
     left = mix(DriveCmd(0.5, 0.2), config)
     assert left.left == pytest.approx(0.3) and left.right == pytest.approx(0.7)
 
 
-def test_mix_pivot_and_rescale():
+def test_mix_pivot_and_rescale(uncorrected):
     pivot = mix(DriveCmd(0.0, 0.5), config)
     assert (pivot.left, pivot.right) == (-0.5, 0.5)
     fast = mix(DriveCmd(1.0, 0.5), config)

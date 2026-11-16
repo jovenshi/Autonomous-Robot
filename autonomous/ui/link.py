@@ -1,5 +1,5 @@
 """Main-process side of the operator process: start it, build packets, send,
-read commands (taps, keys and PS5 buttons).
+read commands (taps, keys and PS5 buttons) and the PS5 triggers and stick.
 
 Nothing here can block or crash the control loop because of the display:
 send() drops the packet when the one-slot queue is full, read_commands()
@@ -9,12 +9,12 @@ pygame is never imported in the main process.
 import multiprocessing
 import queue
 
-from robot_types import UiCommand, UiPacket
+from robot_types import ManualInput, UiCommand, UiPacket
 from ui.screen import run_ui
 
 # Commands the control loop acts on; NEXT_VIEW stays in the UI.
 _MAIN_COMMANDS = (UiCommand.START, UiCommand.STOP, UiCommand.MODE_DRIVE,
-                  UiCommand.MODE_INTERSECTION, UiCommand.MODE_SIGNS)
+                  UiCommand.MODE_INTERSECTION, UiCommand.MODE_SIGNS, UiCommand.RECORD)
 
 
 def start_ui(cfg):
@@ -41,17 +41,19 @@ def stop_ui(process, cfg):
 
 
 def make_ui_packet(sys, now, drive, motor, lane, road_yaw, imu, sign_vote, fps, overruns,
-                   warnings, front, side, include_views, location=None):
+                   warnings, front, side, include_views, location=None, recording=None,
+                   manual=False):
     # Arguments in UiPacket field order (state, stop_reason and mode come
     # from sys.behaviour). Numbers every loop; camera results (with their
     # views) only when include_views, so images go every UI_IMAGE_EVERY
     # loops. location: the LocationObs in QUIZ_INTERSECTION, else None.
+    # recording: RecordStatus or None; manual: driven by hand this loop.
     return UiPacket(
         t=now, state=sys.behaviour.state, stop_reason=sys.behaviour.stop_reason,
         drive=drive, motor=motor, lane=lane, road_yaw=road_yaw, imu=imu, sign_vote=sign_vote,
         fps=dict(fps), overruns=overruns, warnings=tuple(warnings),
         front=front if include_views else None, side=side if include_views else None,
-        mode=sys.behaviour.mode, location=location,
+        mode=sys.behaviour.mode, location=location, recording=recording, manual=manual,
     )
 
 
@@ -64,12 +66,20 @@ def send(packet_q, packet):
 
 
 def read_commands(cmd_q):
-    # Every UI command waiting, without blocking: START, STOP and the modes.
-    out = []
+    # Every UI command waiting, without blocking: START, STOP, RECORD and the
+    # modes (stick readings are dropped; read_ui keeps them).
+    return read_ui(cmd_q)[0]
+
+
+def read_ui(cmd_q):
+    # Everything waiting, without blocking -> (commands, newest ManualInput or None).
+    out, manual = [], None
     while True:
         try:
-            command = cmd_q.get_nowait()
+            item = cmd_q.get_nowait()
         except (queue.Empty, EOFError, OSError, ValueError):
-            return out
-        if command in _MAIN_COMMANDS:
-            out.append(command)
+            return out, manual
+        if isinstance(item, ManualInput):
+            manual = item
+        elif item in _MAIN_COMMANDS:
+            out.append(item)

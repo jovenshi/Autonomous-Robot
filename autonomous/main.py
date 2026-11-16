@@ -10,9 +10,16 @@ side camera (SIDE_CAM_ENABLED, if it opens) classes the ground in SIDE_BOX
 Modes: DRIVE (straight driving), QUIZ_INTERSECTION (drive through the
 junction reporting each zone, docs/quiz3_plan.md stage 6), QUIZ_SIGNS.
 
+RECORD (PS5 D-pad Up, r) records the run's camera frames (run_recorder.py)
+and STARTs it in the selected mode; RECORD again (or STOP, or the run ending)
+stops both. While stopped (IDLE or SAFE_STOP, so always in QUIZ_SIGNS) the
+robot can be driven by hand with the PS5 triggers and left stick
+(control/manual.py, the same driving as manual/robot_controller.py).
+
 Run from the robot/ folder:  python main.py
     Enter            START  (again after SAFE_STOP: once to IDLE, once to drive)
     s then Enter     STOP   (back to IDLE)
+    r then Enter     RECORD (record and START; again: STOP and end the recording)
     1 / 2 / 3 Enter  mode: drive / intersection quiz / sign quiz (only in IDLE)
     Ctrl-C           quit; motors are stopped first
 
@@ -32,6 +39,7 @@ from behavior.sign_voter import SignVoter
 from behavior.state_machine import Behaviour
 from control.command import drive_for_state
 from control.lane_controller import LaneController
+from control.manual import MANUAL_STATES, ManualControl
 from control.mixer import mix
 from estimation.health import check_health
 from estimation.lane_fusion import fuse_lane, is_fresh
@@ -49,10 +57,12 @@ from perception.side_surface import process_side_frame
 from perception.signs import load_sign_model
 from perception.worker import start_worker, stop_worker, take_result
 from robot_types import LatestValue, State, UiCommand, VisionResult
+from run_recorder import RunRecorder
 from tools.calib_status import startup_line
-from ui.link import make_ui_packet, read_commands, send, start_ui, stop_ui
+from ui.link import make_ui_packet, read_ui, send, start_ui, stop_ui
 
 _LANE_STATES = (State.LANE_FOLLOW, State.APPROACH, State.REACQUIRE)
+_HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 @dataclass
@@ -90,6 +100,11 @@ class System:
     last_side_check: tuple = ("", None)   # (side edge, error) last printed
     last_status_t: float = 0.0
     last_drive: object = None
+    manual: object = None                 # ManualControl; None in tests without one
+    recorder: object = None               # RunRecorder; None in tests without one
+    record_pending: bool = False          # RECORD asked this loop: start once the mode is known
+    record_mode: object = None            # RunMode the current recording was started in
+    hand_driven: bool = False             # last loop was driven by hand
 
 
 # ---------------------------------------------------------------- build
@@ -113,11 +128,12 @@ def build_system(cfg):
     imu = ImuReader(imu_slot, drift_request, cfg)
     imu.start()
     ui = start_ui(cfg) if cfg.UI_ENABLED else (None, None, None)
+    recorder = RunRecorder(os.path.join(_HERE, cfg.RECORD_DIR), cfg)
     front_slot = LatestValue()
     front_cam, front_exposure = _build_front_camera(cfg, front_slot, signs_enabled, exposure_hold,
-                                                    shared)
+                                                    shared, recorder)
     side_slot = LatestValue()
-    side_cam = _build_side_camera(cfg, side_slot)
+    side_cam = _build_side_camera(cfg, side_slot, recorder)
 
     saber = SabertoothDriver(cfg.SABER_PORT, cfg.SABER_BAUD, cfg.SABER_ADDRESS, cfg)
     saber.open()
@@ -126,6 +142,8 @@ def build_system(cfg):
 
     commands = queue.Queue()
     _start_keyboard(commands)
+    loop_log = _open_loop_log(cfg)
+    recorder.loop_log_path = loop_log.path if loop_log is not None else None
     return System(
         cfg=cfg, front_slot=front_slot, signs_enabled=signs_enabled,
         exposure_hold=exposure_hold, front_cam=front_cam, front_exposure=front_exposure,
@@ -133,7 +151,7 @@ def build_system(cfg):
         behaviour=Behaviour(cfg, signs_enabled, exposure_hold, drift_request),
         commands=commands, voter=SignVoter(cfg), locator=LocationTracker(cfg),
         imu=imu, imu_slot=imu_slot,
-        loop_log=_open_loop_log(cfg),
+        loop_log=loop_log, manual=ManualControl(cfg), recorder=recorder,
         ui_process=ui[0], ui_packet_q=ui[1], ui_cmd_q=ui[2],
         shared_frame=shared, worker=worker, worker_start_t=time.monotonic(),
         side_cam=side_cam, side_slot=side_slot,
@@ -143,15 +161,16 @@ def build_system(cfg):
 def _open_loop_log(cfg):
     if not cfg.LOOP_LOG_ENABLED:
         return None
-    log = LoopLog(os.path.join(os.path.dirname(os.path.abspath(__file__)), cfg.LOOP_LOG_DIR), cfg)
+    log = LoopLog(os.path.join(_HERE, cfg.LOOP_LOG_DIR), cfg)
     print(f"Logging each loop to {log.path}")
     return log
 
 
-def _build_front_camera(cfg, slot, signs_enabled, exposure_hold, shared=None):
+def _build_front_camera(cfg, slot, signs_enabled, exposure_hold, shared=None, recorder=None):
     # Starts the front camera thread and locks exposure after warm-up. With
     # shared (a SharedFrame: the vision worker is on) the thread measures
     # the lane and shares the frame; otherwise it reads location and signs too.
+    # recorder (RunRecorder): every frame is offered to it while recording.
     source = CsiSource(cfg.FRONT_CAM_NUM, cfg.FRONT_SIZE, cfg)
     exposure = ExposureControl(source, "front", cfg)
     tracker = LaneTracker()                          # search window, camera thread only
@@ -166,6 +185,8 @@ def _build_front_camera(cfg, slot, signs_enabled, exposure_hold, shared=None):
             result = process_front_frame(frame, False, cfg, tracker, with_vision=False)
             shared.publish(frame, result.lane.line_px)
         exposure.manage_step(result.mean_v, exposure_hold.is_set())
+        if recorder is not None and recorder.active:
+            recorder.front(frame, *source.get_exposure())
         return result
 
     stream = CameraStream(source, process, slot, "front", cfg)
@@ -174,7 +195,7 @@ def _build_front_camera(cfg, slot, signs_enabled, exposure_hold, shared=None):
     return stream, exposure
 
 
-def _build_side_camera(cfg, slot):
+def _build_side_camera(cfg, slot, recorder=None):
     # Starts the side camera thread (auto-exposure: the webcam's manual
     # settings are not confirmed yet), or returns None with a warning: the
     # robot drives without it.
@@ -182,7 +203,13 @@ def _build_side_camera(cfg, slot):
         return None
     source = UsbSource(cfg.SIDE_CAM_DEVICE, cfg.SIDE_SIZE, cfg.SIDE_CAM_FOURCC, cfg,
                        cfg.SIDE_CAPTURE_SIZE)
-    stream = CameraStream(source, lambda frame: process_side_frame(frame, cfg), slot, "side", cfg)
+
+    def process(frame):
+        if recorder is not None:
+            recorder.side(frame)
+        return process_side_frame(frame, cfg)
+
+    stream = CameraStream(source, process, slot, "side", cfg)
     try:
         stream.start()
     except Exception as e:
@@ -201,13 +228,13 @@ def _open_sign_model(cfg):
         return None
 
 
-_KEYS = {"s": UiCommand.STOP, "1": UiCommand.MODE_DRIVE, "2": UiCommand.MODE_INTERSECTION,
-         "3": UiCommand.MODE_SIGNS}
+_KEYS = {"s": UiCommand.STOP, "r": UiCommand.RECORD, "1": UiCommand.MODE_DRIVE,
+         "2": UiCommand.MODE_INTERSECTION, "3": UiCommand.MODE_SIGNS}
 
 
 def _start_keyboard(commands):
     # Terminal stand-in for the display: Enter = START, "s" + Enter = STOP,
-    # 1 / 2 / 3 + Enter = drive / intersection quiz / sign quiz mode.
+    # "r" + Enter = RECORD, 1 / 2 / 3 + Enter = drive / intersection quiz / sign quiz mode.
     def read_keys():
         while True:
             try:
@@ -222,7 +249,8 @@ def _start_keyboard(commands):
 # ---------------------------------------------------------------- one loop
 
 def control_step(sys, now):
-    # Read slots -> fuse -> road yaw -> health -> behaviour -> drive -> mix -> Sabertooth.
+    # Read slots -> fuse -> road yaw -> health -> behaviour -> drive -> mix
+    # (or driven by hand while stopped) -> Sabertooth.
     # imu_raw is the latest sample whatever its age (health and the safety
     # check judge staleness); imu is None when it is missing or older than
     # MAX_OBS_AGE_S, so road yaw and steering never use stale yaw.
@@ -235,7 +263,11 @@ def control_step(sys, now):
     road_yaw = sys.road_yaw.get() if sys.imu is not None else None
     commands = _read_commands(sys.commands)
     if sys.ui_cmd_q is not None:
-        commands += read_commands(sys.ui_cmd_q)      # taps, merged with the keyboard
+        ui_commands, manual_input = read_ui(sys.ui_cmd_q)
+        commands += ui_commands                      # taps, merged with the keyboard
+        if sys.manual is not None:
+            sys.manual.take(manual_input)            # PS5 triggers and stick
+    commands = _apply_record(sys, commands)
 
     vision = _vision(sys, front)
     side = sys.side_slot.get() if sys.side_cam is not None else None
@@ -252,11 +284,25 @@ def control_step(sys, now):
         vote = _sign_vote(sys, vision, now)          # sign reading went off this loop: clear
     if state in _LANE_STATES and state != sys.prev_state:
         sys.lane_ctrl.reset()
-    if sys.prev_state == State.IDLE and state != State.IDLE and sys.locator is not None:
-        sys.locator.reset()                          # each run starts its own junction pass
+    if sys.prev_state == State.IDLE and state != State.IDLE:
+        # A new run: its own junction pass, and its own road (the last run's
+        # road direction is stale once the robot has been moved; within a run
+        # it is kept through every junction and turn).
+        if sys.locator is not None:
+            sys.locator.reset()
+        sys.road_yaw.reset()
+        road_yaw = sys.road_yaw.get() if sys.imu is not None else None
+    _update_recording(sys, state, commands)
 
     drive = drive_for_state(state, lane, imu, sys.behaviour, sys.lane_ctrl, front, cfg, road_yaw)
     motor = mix(drive, cfg)
+    hand = sys.manual.step(state, imu, now) if sys.manual is not None else None
+    if hand is not None:
+        drive, motor = hand                          # stopped, and driven by hand
+    if (hand is not None) != sys.hand_driven:
+        print("Driving by hand" if hand is not None else "Stopped driving by hand")
+        sys.hand_driven = hand is not None
+    sys.behaviour.set_hand_driven(hand is not None)
     sys.saber.set(motor)                             # every loop, or the timeout stops the motors
     sys.last_drive = drive
     quiz_location = sys.behaviour.location           # None outside QUIZ_INTERSECTION
@@ -269,10 +315,50 @@ def control_step(sys, now):
         send(sys.ui_packet_q, make_ui_packet(sys, now, drive, motor, lane, road_yaw, imu_raw,
                                              vote, fps, overruns, warnings,
                                              _front_for_ui(sys, front, vision), side,
-                                             include_views, quiz_location))
+                                             include_views, quiz_location,
+                                             sys.recorder.status() if sys.recorder is not None else None,
+                                             hand is not None))
     _report(sys, state, lane, imu, road_yaw, warnings, now, vote, quiz_location)
     _report_side_check(sys, location)
     sys.prev_state = state
+
+
+def _apply_record(sys, commands):
+    # RECORD -> the commands it stands for: STOP while recording (the run and
+    # the recording end); START after a SAFE_STOP (back to IDLE, as START
+    # there; press again to record); otherwise START, and the recording
+    # starts after this loop's behaviour step (once a mode command in the
+    # same loop has been applied).
+    if UiCommand.RECORD not in commands:
+        return commands
+    commands = [c for c in commands if c != UiCommand.RECORD]
+    if sys.recorder is not None and sys.recorder.active:
+        return commands + [UiCommand.STOP]
+    if sys.behaviour.state != State.SAFE_STOP and sys.recorder is not None:
+        sys.record_pending = True
+    return commands + [UiCommand.START]
+
+
+def _update_recording(sys, state, commands):
+    # Starts a RECORD asked for this loop; stops the recording on STOP, when
+    # the run ends (IDLE or SAFE_STOP after driving) or on a mode change.
+    recorder = sys.recorder
+    if recorder is None:
+        return
+    mode = sys.behaviour.mode
+    if sys.record_pending:
+        sys.record_pending = False
+        if recorder.start(mode.name, sys.side_cam is not None) is not None:
+            sys.record_mode = mode
+        return
+    if not recorder.active:
+        return
+    if UiCommand.STOP in commands:
+        recorder.stop("STOP")
+    elif sys.prev_state not in MANUAL_STATES and state in MANUAL_STATES:
+        recorder.stop(sys.behaviour.stop_reason or "run ended")
+    elif mode != sys.record_mode:
+        recorder.stop("mode changed")
 
 
 def _vision(sys, front):
@@ -457,6 +543,8 @@ def shutdown(sys):
         steps.append(sys.imu.close)
     if sys.loop_log is not None:
         steps.append(sys.loop_log.close)
+    if sys.recorder is not None:
+        steps.append(sys.recorder.close)            # writes the frames still queued
     if sys.ui_process is not None:
         def stop_display():
             stop_ui(sys.ui_process, sys.cfg)
@@ -482,8 +570,10 @@ def main():
     try:
         print(startup_line(config))
         system = build_system(config)
-        print("Ready. Enter = START, s + Enter = STOP, Ctrl-C = quit")
+        print("Ready. Enter = START, s + Enter = STOP, r + Enter = RECORD and START, Ctrl-C = quit")
         print("Modes: 1 + Enter = drive, 2 + Enter = intersection quiz, 3 + Enter = sign quiz")
+        print("PS5: Cross = START/STOP, D-pad Up = RECORD and START (again: STOP); "
+              "stopped: R2 / L2 + left stick drive by hand")
         run(system)
     except KeyboardInterrupt:
         print("\nStopping")

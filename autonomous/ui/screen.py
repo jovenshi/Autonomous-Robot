@@ -8,12 +8,15 @@ the chosen view as one DISPLAY_SIZE BGR image, and shows it with pygame.
 
 Layout (800 x 480): a main area (640 x 480) with the run-mode banner along
 its top in every view (camera views are letterboxed under it, never
-stretched) and a 160 px control column on the right in every view: START,
-STOP (not an e-stop), the warning light and VIEW.
+stretched; a red REC and the recording time while recording) and a 160 px
+control column on the right in every view: START, REC (record and START;
+again: STOP), STOP (not an e-stop), the warning light and VIEW.
 Views cycle DRIVE (glanceable, default) -> CAMERA -> DIAGNOSTIC (every number).
 
 The PS5 controller (ui/gamepad.py) is read from the same pygame events as the
-taps; the announcer (ui/announcer.py) is fed the newest packet every cycle.
+taps; its triggers and left stick go to main every cycle (driving by hand
+while stopped). The announcer (ui/announcer.py) is fed the newest packet
+every cycle.
 
 pygame is imported only inside this process, after the display environment
 defaults are set, so the main process never loads it.
@@ -33,13 +36,15 @@ from ui.overlay import (AMBER, BG, GREEN, LINE, MUTED, PANEL, RED, TEXT, draw_an
                         draw_front_overlay, draw_no_data, draw_side_overlay, draw_sign_overlay,
                         draw_sign_panel, mark_stale)
 from ui.panels import (History, draw_banner, draw_chart, draw_header, draw_lane_gauge,
-                       draw_preflight, draw_status, draw_steer_bar, preflight)
+                       draw_preflight, draw_status, draw_steer_bar, preflight, rec_time)
 from ui.text import draw_text
 
 VIEWS = ("drive", "camera", "diagnostic")
-COLUMN_ZONES = ("start", "stop", "light", "next")
-COLUMN_SPLITS = (0.0, 0.3, 0.66, 0.85, 1.0)        # fractions of screen height
-TAP_COMMANDS = {"start": UiCommand.START, "stop": UiCommand.STOP, "next": UiCommand.NEXT_VIEW}
+COLUMN_ZONES = ("start", "rec", "stop", "light", "next")
+COLUMN_SPLITS = (0.0, 0.24, 0.42, 0.66, 0.85, 1.0)  # fractions of screen height
+TAP_COMMANDS = {"start": UiCommand.START, "rec": UiCommand.RECORD, "stop": UiCommand.STOP,
+                "next": UiCommand.NEXT_VIEW}
+REC_FILL = (30, 30, 150)                            # BGR; REC button while recording
 INSET_FRAC = 0.33                                   # side-camera inset, fraction of main width
 GAP = 16                                            # px; margin inside the main area
 BANNER_H = 30                                       # px; run-mode banner along the top
@@ -49,7 +54,7 @@ MODE_KEYS = {"K_1": UiCommand.MODE_DRIVE, "K_2": UiCommand.MODE_INTERSECTION,
 
 
 def make_layout(display_size):
-    # {'main': rect, 'start' | 'stop' | 'light' | 'next': rect}
+    # {'main': rect, 'start' | 'rec' | 'stop' | 'light' | 'next': rect}
     w, h = display_size
     main_w = min(w, h * 4 // 3)
     bounds = [int(round(f * h)) for f in COLUMN_SPLITS]
@@ -190,6 +195,12 @@ class Screen:
         ready = packet is not None and all(ok for _, ok in preflight(packet, self.cfg))
         _button(frame, self.layout["start"], (40, 95, 36) if ready else PANEL, "START",
                 "ready" if ready else "not ready", GREEN if not ready else TEXT)
+        rec = packet.recording if packet is not None else None
+        if rec is None:
+            _button(frame, self.layout["rec"], PANEL, "REC", "record + start", RED, size=26)
+        else:
+            _button(frame, self.layout["rec"], REC_FILL, "STOP REC", rec_time(rec, packet.t),
+                    TEXT, size=22)
         _button(frame, self.layout["stop"], (40, 40, 170), "STOP", "not an e-stop", TEXT)
         self._draw_light(frame, packet)
         _button(frame, self.layout["next"], PANEL, "VIEW", view.upper(), TEXT, size=22)
@@ -215,6 +226,8 @@ class Screen:
             return start_or_stop(state)
         if key == pygame.K_v:
             return UiCommand.NEXT_VIEW
+        if key == pygame.K_r:
+            return UiCommand.RECORD
         for name, command in MODE_KEYS.items():
             if key == getattr(pygame, name):
                 return command
@@ -327,10 +340,16 @@ def _drain(packet_q, screen, until):
 
 
 def _read_input(events, screen, gamepad, cmd_q):
-    # Taps and keys, then PS5 buttons, all from this cycle's events.
+    # Taps and keys, then PS5 buttons, all from this cycle's events; then the
+    # PS5 triggers and stick (main drives by hand with them only when stopped).
     state = screen.packet.state if screen.packet is not None else State.IDLE
     for command in [screen.handle_input(events)] + gamepad.poll(events, state):
         _route(command, screen, cmd_q)
+    if gamepad.manual_input is not None:
+        try:
+            cmd_q.put_nowait(gamepad.manual_input)
+        except queue.Full:
+            pass
 
 
 def _route(command, screen, cmd_q):

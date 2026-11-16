@@ -21,9 +21,10 @@ from estimation.health import fps_min
 from robot_types import HealthWarning, State
 from ui.overlay import (AMBER, BLUE, GREEN, LINE, MUTED, PANEL, PURPLE, RED, TEXT, YELLOW, cm,
                         deg)
-from ui.text import draw_text
+from ui.text import draw_text, text_width
 
 STATE_COLOURS = {State.IDLE: MUTED, State.LANE_FOLLOW: GREEN, State.SAFE_STOP: RED}
+HAND_STATES = (State.IDLE, State.SAFE_STOP)   # control/manual.py MANUAL_STATES
 ROW_H = 25                       # px per DIAGNOSTIC row
 ROW_TEXT = 17
 TITLE_TEXT = 13
@@ -36,12 +37,20 @@ def state_colour(state):
 # ---------------------------------------------------------------- DRIVE
 
 def draw_header(img, rect, packet):
-    # State (big, coloured) and stop reason on the left; speed on the right.
+    # State (big, coloured; MANUAL while driven by hand) and stop reason, or
+    # the hand-driving hint while stopped, on the left; speed on the right.
     x, y, w, h = rect
-    draw_text(img, packet.state.name.replace("_", " "), (x + 24, y + 52), 42,
-              state_colour(packet.state), bold=True)
-    if packet.stop_reason:
-        draw_text(img, packet.stop_reason, (x + 26, y + 80), 20, RED)
+    if packet.manual:
+        draw_text(img, "MANUAL", (x + 24, y + 52), 42, BLUE, bold=True)
+        draw_text(img, f"by hand from {packet.state.name.replace('_', ' ')}", (x + 26, y + 80),
+                  20, MUTED)
+    else:
+        draw_text(img, packet.state.name.replace("_", " "), (x + 24, y + 52), 42,
+                  state_colour(packet.state), bold=True)
+        if packet.stop_reason:
+            draw_text(img, packet.stop_reason, (x + 26, y + 80), 20, RED)
+        elif packet.state in HAND_STATES:
+            draw_text(img, "R2 / L2 + left stick: drive by hand", (x + 26, y + 80), 16, MUTED)
     draw_text(img, f"{packet.drive.speed:.2f}", (x + w - 24, y + 52), 42, TEXT, bold=True,
               align="right")
     draw_text(img, "SPEED", (x + w - 24, y + 76), 13, MUTED, bold=True, align="right")
@@ -55,7 +64,14 @@ def draw_banner(img, rect, packet, cfg):
     cv2.line(img, (x, y + h - 1), (x + w, y + h - 1), LINE, 1)
     if packet is None:
         return
-    draw_text(img, cfg.MODE_LABELS[packet.mode.name], (x + 12, y + h - 9), 20, TEXT, bold=True)
+    label = cfg.MODE_LABELS[packet.mode.name]
+    draw_text(img, label, (x + 12, y + h - 9), 20, TEXT, bold=True)
+    if packet.recording is not None:
+        # Red dot, REC and the time, after the mode name.
+        rx = x + 12 + text_width(label, 20, bold=True) + 22
+        cv2.circle(img, (rx, y + h // 2), 6, RED, -1, cv2.LINE_AA)
+        draw_text(img, f"REC {rec_time(packet.recording, packet.t)}", (rx + 12, y + h - 9), 18,
+                  RED, bold=True)
     zone = zone_label(packet, cfg)
     if zone is not None:
         draw_text(img, zone, (x + w - 12, y + h - 9), 20, YELLOW, bold=True, align="right")
@@ -64,6 +80,12 @@ def draw_banner(img, rect, packet, cfg):
     if vote is not None:
         draw_text(img, f"Sign: {cfg.SIGN_PHRASES[vote.sign.name]}", (x + w - 12, y + h - 9), 20,
                   GREEN, bold=True, align="right")
+
+
+def rec_time(rec, now):
+    # "1:05" since the recording started.
+    s = max(0, int(now - rec.started_t))
+    return f"{s // 60}:{s % 60:02d}"
 
 
 def zone_label(packet, cfg):
@@ -179,6 +201,13 @@ def drive_rows(packet):
     rows = [("state", packet.state.name, state_colour(packet.state))]
     if packet.stop_reason:
         rows.append(("stop reason", packet.stop_reason, RED))
+    rows.append(("driven by", "hand (PS5)" if packet.manual else "robot", BLUE if packet.manual
+                 else TEXT))
+    rec = packet.recording
+    if rec is not None:
+        rows.append(("recording", f"{rec_time(rec, packet.t)}  {rec.saved} fr"
+                     + (f"  {rec.dropped} skipped" if rec.dropped else ""),
+                     AMBER if rec.dropped else RED))
     return rows + [("speed", f"{d.speed:.2f}", TEXT), ("steer", f"{d.steer:+.2f}", TEXT),
                    ("motors L / R", f"{m.left:+.2f} / {m.right:+.2f}", TEXT)]
 

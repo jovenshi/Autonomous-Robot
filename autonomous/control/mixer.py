@@ -12,6 +12,9 @@ Before mixing, steer gets two corrections measured by tools/steer_test.py
   * STEER_DEADBAND: the extra steer the robot needs before it actually
     turns (tyre scrub). It is blended in over STEER_DEADBAND_RAMP, so steer
     near 0 stays continuous and noise around 0 can't make it twitch.
+Driving forward, a command whose inner wheel rolls forward (the lane
+controller's arc limit, LANE_STEER_SPEED_RATIO) keeps it rolling forward:
+the corrections are capped there, never reversing that wheel.
 """
 import math
 
@@ -22,6 +25,9 @@ from robot_types import MotorCmd
 
 def mix(cmd, cfg):
     steer = compensate(cmd.steer, cmd.speed, cfg)
+    if cmd.speed > 0 and cfg.STEER_GAIN * abs(cmd.steer) <= cmd.speed:
+        cap = cmd.speed / cfg.STEER_GAIN       # inner wheel exactly stopped
+        steer = max(-cap, min(cap, steer))
     left = cmd.speed - cfg.STEER_GAIN * steer
     right = cmd.speed + cfg.STEER_GAIN * steer
     scale = max(1.0, abs(left), abs(right))

@@ -152,7 +152,7 @@ def test_road_yaw_row_value_and_age():
 def test_layout_letterboxes_into_640_plus_160_column():
     layout = make_layout((800, 480))
     assert layout["main"] == (0, 0, 640, 480)
-    column = [layout[z] for z in ("start", "stop", "light", "next")]
+    column = [layout[z] for z in ("start", "rec", "stop", "light", "next")]
     assert all(x == 640 and w == 160 for x, _, w, _ in column)
     assert column[0][1] == 0 and sum(h for *_, h in column) == 480
 
@@ -211,6 +211,8 @@ def test_taps_and_keys():
     screen, _ = screen_at(0.0)
     assert screen.handle_input([tap("start")]) == UiCommand.START
     assert screen.handle_input([tap("stop")]) == UiCommand.STOP
+    assert screen.handle_input([tap("rec")]) == UiCommand.RECORD
+    assert screen.handle_input([key(pygame.K_r)]) == UiCommand.RECORD
     assert screen.handle_input([tap("next")]) == UiCommand.NEXT_VIEW
     assert screen.handle_input([tap("light")]) is None
     assert screen.handle_input([key(pygame.K_v)]) == UiCommand.NEXT_VIEW

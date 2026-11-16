@@ -60,6 +60,7 @@ def tools_list(cfg):
         Tool("imu", "IMU CHECK", "sign check, terminal", ["-m", "tools.imu_drift_test"], False),
         Tool("record", "RECORD", "20 s of camera, terminal",
              ["-m", "tools.record", "--seconds", "20"], False),
+        Tool("replay", "REPLAY", "play a recording", ["-m", "tools.replay_screen"], True),
         Tool("lens", "LENS STEP", "optional", ["-m", "tools.calib_ui", "--lens"], True),
         Tool("colours", "TUNE COLOURS", "when the light changes, 3 min",
              ["-m", "tools.tune_colors"], True),
@@ -120,7 +121,8 @@ class MenuApp:
         wanted = {key for _, _, key in self.status if key}
         top, cols, gap = 128, 2, 8
         tile_w = (MAIN_W - 16 * 2 - gap) // cols
-        tile_h = (img.shape[0] - top - 12 - gap * 3) // 4
+        rows = -(-len(self.tools) // cols)
+        tile_h = (img.shape[0] - top - 12 - gap * (rows - 1)) // rows
         for i, tool in enumerate(self.tools):
             x = 16 + (i % cols) * (tile_w + gap)
             ty = top + (i // cols) * (tile_h + gap)

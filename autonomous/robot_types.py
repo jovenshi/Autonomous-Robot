@@ -79,6 +79,7 @@ class UiCommand(Enum):
     MODE_DRIVE = auto()
     MODE_INTERSECTION = auto()
     MODE_SIGNS = auto()
+    RECORD = auto()            # not recording: record and START; recording: STOP (ends both)
 
 
 class Zone(Enum):
@@ -299,6 +300,26 @@ class MotorCmd:
     right: float               # -1 to 1
 
 
+# ---------------------------------------------------------------- operator
+
+@dataclass(frozen=True)
+class ManualInput:
+    # The PS5 triggers and left stick, sent by the display process every cycle
+    # a controller is connected; driven by hand only in IDLE and SAFE_STOP.
+    r2: float                  # 0-1, throttle
+    l2: float                  # 0-1, reverse
+    stick_x: float             # -1 (left) to 1 (right); 0 inside the stick deadzone
+    t: float                   # time.monotonic() when read
+
+
+@dataclass(frozen=True)
+class RecordStatus:
+    name: str                  # folder name under RECORD_DIR
+    started_t: float           # time.monotonic()
+    saved: int                 # frames written, front + side
+    dropped: int               # frames skipped because the SD card fell behind
+
+
 # ---------------------------------------------------------------- display
 
 @dataclass(frozen=True)
@@ -319,6 +340,8 @@ class UiPacket:
     side: Optional[SideResult]         # with view, or None
     mode: RunMode = RunMode.DRIVE
     location: Optional[LocationObs] = None
+    recording: Optional[RecordStatus] = None   # None when not recording
+    manual: bool = False               # driven by hand this loop (PS5 triggers and stick)
 
 
 # ---------------------------------------------------------------- slots

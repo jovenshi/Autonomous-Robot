@@ -60,6 +60,7 @@ class Behaviour:
         self._last_step_t = None
         self._moving_s = 0.0               # time in this state not spent paused
         self._reacquire_run = 0            # loops in a row with lane conf >= REACQUIRE_CONF
+        self.hand_driven = False           # driven by hand (control/manual.py) this loop
         self._enter(State.IDLE, 0.0)
 
     def step(self, front, side, lane, road_yaw, sign, imu, commands, motor_error, now,
@@ -235,6 +236,10 @@ class Behaviour:
 
     def _enter(self, state, now, reason=None):
         # Records entry time and reason; sets the camera and IMU thread flags.
+        # A run starting forgets the zone: main resets the location tracker
+        # then, and its jump to CONTINUE is not a zone change to pause for.
+        if state in _MOVING_STATES and self.state not in _MOVING_STATES:
+            self._zone = None
         self.state = state
         self.state_t = now
         self.stop_reason = reason if state == State.SAFE_STOP else None
@@ -246,8 +251,19 @@ class Behaviour:
         if state in (State.LANE_FOLLOW, State.REACQUIRE):
             self._lane_seen_t = now        # fresh grace period on start and after CROSS
         self._set_flag(self.exposure_hold, state != State.LANE_FOLLOW)
-        self._set_flag(self.drift_request, state in _STILL_STATES)
+        self._set_drift_flag()
         self._set_sign_flag()
+
+    def set_hand_driven(self, on):
+        # Called every loop by main: while the robot is driven by hand it is
+        # not still, so gyro drift is not measured (it restarts, after
+        # IMU_DRIFT_SETTLE_S, once the robot stops).
+        if on != self.hand_driven:
+            self.hand_driven = on
+            self._set_drift_flag()
+
+    def _set_drift_flag(self):
+        self._set_flag(self.drift_request, self.state in _STILL_STATES and not self.hand_driven)
 
     def _set_sign_flag(self):
         # Signs are read all the time in QUIZ_SIGNS, and through a whole

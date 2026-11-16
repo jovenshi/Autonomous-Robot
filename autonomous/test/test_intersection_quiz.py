@@ -71,7 +71,7 @@ def test_each_zone_calls_for_its_state(quiz):
         seen.append(step(quiz, t, s))
     assert seen == [State.LANE_FOLLOW, State.LANE_FOLLOW, State.APPROACH, State.APPROACH,
                     State.CROSS, State.CROSS, State.CROSS, State.REACQUIRE, State.REACQUIRE,
-                    State.IDLE]
+                    State.REACQUIRE]                    # on past Continue travel: no IDLE
     assert quiz.location is not None and not quiz.paused
 
 
@@ -116,7 +116,7 @@ def test_losing_the_pass(quiz):
     assert step(quiz, 8.0, None) == State.REACQUIRE       # cross: hand over to the lane
 
 
-def test_reacquire_hands_back_to_lane_follow_and_the_run_still_ends(quiz):
+def test_reacquire_hands_back_to_lane_follow_and_the_run_goes_on(quiz):
     step(quiz, 1.0, mid(4))
     step(quiz, 4.0, B[5] + 0.02)
     assert quiz.state == State.REACQUIRE
@@ -126,7 +126,8 @@ def test_reacquire_hands_back_to_lane_follow_and_the_run_still_ends(quiz):
         state = step(quiz, t, B[5] + 0.05)
     assert state == State.LANE_FOLLOW
     assert step(quiz, t + 0.03, 0.39) == State.LANE_FOLLOW
-    assert step(quiz, t + 0.06, config.QUIZ_EXIT_M) == State.IDLE
+    assert step(quiz, t + 0.06, 0.6) == State.LANE_FOLLOW          # Continue travel: drives on
+    assert step(quiz, t + 0.09, None) == State.LANE_FOLLOW         # pass over: to the next junction
 
 
 def test_stop_ends_the_pause_and_mode_needs_idle(quiz):
@@ -155,11 +156,13 @@ def make_quiz_system():
     )
 
 
-def run_quiz(start_s, seconds, capsys):
+def run_quiz(start_s, seconds, capsys, end_s=None):
     # The robot on its line at start_s; every loop the camera sees the
     # junction from where the robot really is, and it moves by the speed it
-    # was sent. Returns (zones announced in order with the true s at each,
+    # was sent, until it stops or passes end_s (LOCATION_PASS_END_M + 0.1 by
+    # default). Returns (zones announced in order with the true s at each,
     # states seen, true s at the end, loops paused).
+    end_s = config.LOCATION_PASS_END_M + 0.1 if end_s is None else end_s
     sys_ = make_quiz_system()
     sys_.commands.put(UiCommand.MODE_INTERSECTION)
     sys_.commands.put(UiCommand.START)
@@ -177,13 +180,13 @@ def run_quiz(start_s, seconds, capsys):
         if not states or states[-1] != sys_.behaviour.state:
             states.append(sys_.behaviour.state)
         paused += sys_.behaviour.paused
-        if sys_.behaviour.state == State.IDLE and len(states) > 2:
+        if (sys_.behaviour.state == State.IDLE and len(states) > 2) or s_true >= end_s:
             break
     return zones, states, s_true, paused
 
 
 @pytest.mark.parametrize("start_s", [-1.6, -1.1])
-def test_quiz_run_reports_every_zone_in_place_then_stops(start_s, capsys):
+def test_quiz_run_reports_every_zone_in_place_then_drives_on(start_s, capsys):
     # Two start positions, as in the quiz.
     zones, states, s_end, paused = run_quiz(start_s, 40.0, capsys)
     assert [z for z, _ in zones] == list(ORDER)
@@ -191,8 +194,9 @@ def test_quiz_run_reports_every_zone_in_place_then_stops(start_s, capsys):
         assert s == pytest.approx(bound, abs=0.03), zone       # each change where it belongs
     # REACQUIRE may hand back to LANE_FOLLOW (lane confident) before the end
     assert states[:4] == [State.LANE_FOLLOW, State.APPROACH, State.CROSS, State.REACQUIRE]
-    assert states[-1] == State.IDLE and set(states[4:-1]) <= {State.LANE_FOLLOW}
-    assert s_end == pytest.approx(config.QUIZ_EXIT_M, abs=0.03)
+    # after Continue travel it lane-follows on, past the end of the pass
+    assert set(states[4:]) == {State.LANE_FOLLOW} and State.IDLE not in states
+    assert s_end >= config.LOCATION_PASS_END_M
     # six judging pauses of ZONE_PAUSE_S
     assert paused == pytest.approx(6 * PAUSE * config.CONTROL_HZ, abs=6 * 2)
     # the terminal reports each zone once, from Read the sign on

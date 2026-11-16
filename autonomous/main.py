@@ -87,6 +87,7 @@ class System:
     overrun_times: deque = field(default_factory=deque)
     last_warnings: tuple = ()
     last_seen: tuple = (None, None, None) # (mode, voted sign, zone) last printed
+    last_side_check: tuple = ("", None)   # (side edge, error) last printed
     last_status_t: float = 0.0
     last_drive: object = None
 
@@ -179,7 +180,8 @@ def _build_side_camera(cfg, slot):
     # robot drives without it.
     if not cfg.SIDE_CAM_ENABLED:
         return None
-    source = UsbSource(cfg.SIDE_CAM_DEVICE, cfg.SIDE_SIZE, cfg.SIDE_CAM_FOURCC, cfg)
+    source = UsbSource(cfg.SIDE_CAM_DEVICE, cfg.SIDE_SIZE, cfg.SIDE_CAM_FOURCC, cfg,
+                       cfg.SIDE_CAPTURE_SIZE)
     stream = CameraStream(source, lambda frame: process_side_frame(frame, cfg), slot, "side", cfg)
     try:
         stream.start()
@@ -269,6 +271,7 @@ def control_step(sys, now):
                                              _front_for_ui(sys, front, vision), side,
                                              include_views, quiz_location))
     _report(sys, state, lane, imu, road_yaw, warnings, now, vote, quiz_location)
+    _report_side_check(sys, location)
     sys.prev_state = state
 
 
@@ -381,6 +384,20 @@ def _report(sys, state, lane, imu, road_yaw, warnings, now, vote=None, location=
         print(_status_line(sys, state, lane))
         print("  " + _imu_line(imu, road_yaw, now))
         sys.last_status_t = now
+
+
+def _report_side_check(sys, location):
+    # One terminal line per side camera edge measured in a pass.
+    if location is None or not location.side_edge:
+        return
+    check = (location.side_edge, location.side_error_m)
+    if check == sys.last_side_check:
+        return
+    sys.last_side_check = check
+    err = location.side_error_m * 100
+    how = "corrected" if sys.cfg.SIDE_FIXES_ENABLED else "not corrected: SIDE_FIXES_ENABLED is off"
+    print(f"Side camera {check[0]} edge: estimate was {abs(err):.1f} cm "
+          f"{'behind' if err >= 0 else 'ahead'} ({how})")
 
 
 def _where(location):

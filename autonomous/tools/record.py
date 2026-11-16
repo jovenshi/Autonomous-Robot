@@ -52,6 +52,7 @@ def make_meta(cfg, camera="front"):
         "frame_size": list(cfg.FRONT_SIZE if camera == "front" else cfg.SIDE_SIZE),
         "cam_fps": cfg.CAM_FPS,
         "exposure_mode": cfg.EXPOSURE_MODE if camera == "front" else "auto",
+        "capture_size": list(cfg.FRONT_SIZE if camera == "front" else cfg.SIDE_CAPTURE_SIZE),
         "created": datetime.datetime.now().isoformat(timespec="seconds"),
     }
 
@@ -73,7 +74,8 @@ def build(cfg, writer, recording):
 
 def build_side(cfg, writer, recording):
     # The side camera's thread, saving like the front one (auto-exposure).
-    source = UsbSource(cfg.SIDE_CAM_DEVICE, cfg.SIDE_SIZE, cfg.SIDE_CAM_FOURCC, cfg)
+    source = UsbSource(cfg.SIDE_CAM_DEVICE, cfg.SIDE_SIZE, cfg.SIDE_CAM_FOURCC, cfg,
+                       cfg.SIDE_CAPTURE_SIZE)
 
     def save(frame):
         if recording.is_set():

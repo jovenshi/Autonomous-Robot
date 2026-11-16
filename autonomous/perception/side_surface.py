@@ -1,13 +1,14 @@
-"""Side camera: the surface inside SIDE_BOX (docs/quiz3_plan.md, stage 8).
+"""Side camera: the road fraction across SIDE_BOX (docs/quiz3_plan.md, stage 8).
 
-The side camera looks out to the right of the robot. Coming into the
-junction its box (the ground nearest the robot) turns from grass to road at
-the rounded corner, and back to grass past the cross road;
-estimation/location.py turns those changes into position fixes
-(SIDE_FIXES_M). The webcam's colours are washed out (grass barely passes
-for green), so the box is classed by the road mask alone: ROAD at
-SIDE_ROAD_MIN_FRAC or more road, GRASS at SIDE_GRASS_MAX_FRAC or less,
-neither in between (a mat seam or a shadow crossing the box).
+The side camera looks out to the right of the robot. SIDE_BOX is a band
+across the middle of its (wide) view. Coming into the junction the band's
+road fraction ramps up as the corner's grass slides out of view, and back
+down past the cross road as the far side's grass slides in;
+estimation/location.py turns where it crosses SIDE_EDGE_FRAC into position
+fixes (SIDE_EDGES_M). The webcam's colours are washed out (grass barely
+passes for green), so the band is judged by the road mask alone. For the
+display and the log it is also classed: ROAD at SIDE_ROAD_MIN_FRAC or more
+road, GRASS at SIDE_GRASS_MAX_FRAC or less, mixed in between.
 
 process_side_frame is the side camera thread's entry point.
 """
@@ -30,13 +31,14 @@ def classify_surface(road_mask, cfg):
 
 
 def process_side_frame(frame, cfg):
-    # One side frame -> SideResult with the box's surface and, for the
-    # display, the box and its label.
+    # One side frame -> SideResult with the band's road fraction and class
+    # and, for the display, the band and its label.
     road, _ = make_side_masks(frame, cfg)
     surface, frac = classify_surface(road, cfg)
     return SideResult(view=frame.image, side=None,
                       mean_v=_mean_v(frame.image), t=frame.t, seq=frame.seq,
-                      surface=surface, annotations=_box_notes(surface, frac, cfg))
+                      surface=surface, annotations=_box_notes(surface, frac, cfg),
+                      road_frac=frac)
 
 
 def _mean_v(image):

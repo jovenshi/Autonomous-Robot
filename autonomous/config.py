@@ -27,7 +27,8 @@ SIDE_CAM_DEVICE = "/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._Webcam_Webcam-v
 SIDE_CAM_FOURCC = "MJPG"         # MEASURED 2026-11-15: this webcam gives YUYV at 3 fps (though it lists 30), MJPG at 19 fps
 FRONT_SIZE = (640, 480)
 FRONT_LANE_SIZE = (320, 240)
-SIDE_SIZE = (320, 240)
+SIDE_SIZE = (320, 240)          # the side frames everything downstream sees (SIDE_BOX is in these px)
+SIDE_CAPTURE_SIZE = (1024, 768) # MEASURED 2026-11-15: this webcam's 320x240 is a crop of the sensor; 1024x768 sees the whole sensor (about 3x wider) at the same 18.5 fps, shrunk to SIDE_SIZE
 FRONT_LENS_POSITION = 2.0       # dioptres (1 / focus distance in m); MEASURED; Camera Module 3 manual focus
 CAM_READ_RETRY_S = 0.01         # s; pause after a failed read before trying again
 CAM_FPS_WINDOW_S = 1.0          # s; window over which fps() is measured
@@ -135,12 +136,12 @@ BRIGHT_WARN_V = 220             # 0-255
 
 # ---------------------------------------------------------------- colour tests (TUNED)
 # From the test
-YELLOW_H_MIN = 21
-YELLOW_H_MAX = 30
-YELLOW_S_MIN = 116
-YELLOW_V_MIN = 72
-ROAD_S_MAX = 100
-ROAD_V_T_MIN = 51
+YELLOW_H_MIN = 0
+YELLOW_H_MAX = 34
+YELLOW_S_MIN = 132
+YELLOW_V_MIN = 70
+ROAD_S_MAX = 102
+ROAD_V_T_MIN = 93
 ROAD_V_T_MAX = 142
 
 GREEN_CHROM_MIN = 0.40          # G / (R+G+B)
@@ -149,9 +150,9 @@ DARK_SUM_MIN = 90               # R+G+B; below = too dark to judge
 WHITE_S_MAX = 50
 WHITE_V_REL = 0.8               # ratio of the frame's bright percentile
 WHITE_V_PCT = 95                # percentile
-RED_H_LOW_MAX = 10
+RED_H_LOW_MAX = 4
 RED_H_HIGH_MIN = 170
-RED_S_MIN = 100
+RED_S_MIN = 158
 
 # ---------------------------------------------------------------- junctions and signs
 
@@ -236,63 +237,58 @@ STOP_HOLD_S = 3.0               # s
 # s is the rear axle's distance along the road from the junction centre, in
 # metres, negative before the centre (docs/quiz3_plan.md).
 
-# Zones (2026-11-15, from the first runs on the mat), as rear-axle s:
-#   READ_SIGN  when the sign is cut off by the edge of the front camera's view
-#              (estimation/location.py), at READ_SIGN_LATEST_M if it never is
-#   PAUSE      the robot's front reaches where the corners start to curve
-#   ENTERING   the robot's front reaches the cross road's near edge
-#   TURN       TURN_ZONE_EARLY_M before the rear wheels are halfway from that
-#              edge to the yellow line
-#   EXITING    0.04 m past the centre (course zone diagram)
-#   CONTINUE   the rear axle reaches where the road stops widening on the far
-#              side, JUNCTION_CORNER_M past the centre
-ROBOT_FRONT_M = 0.33            # m; MEASURED 2026-11-15: rear axle to the front of the robot (redo after adding a front piece)
-JUNCTION_CORNER_M = 0.28        # m before the centre where the road starts to widen into the rounded corners (course diagram; also the flare)
-CROSS_ROAD_EDGE_M = ROAD_WIDTH_M / 2   # m before the centre: the cross road's near edge
-TURN_ZONE_EARLY_M = 0.02        # m; Turn zone starts this much before the halfway point (2026-11-15, on the mat)
-READ_SIGN_LATEST_M = -0.73      # m; READ_SIGN starts here if the sign was never seen leaving the view
+# Zones, as rear-axle s. READ_SIGN starts when the sign is cut off by the
+# edge of the front camera's view (estimation/location.py), at
+# READ_SIGN_LATEST_M if it never is. The others are MEASURED 2026-11-15 with
+# a tape on the mat (rear axle to the junction centre); on recordings/truth_1
+# the estimate was within 2 cm of the tape before the centre and 2-4 cm
+# behind it from 0 to +0.30.
+READ_SIGN_LATEST_M = -0.83      # m; READ_SIGN starts here if the sign was never seen leaving the view (10 cm earlier than -0.73: 2026-11-15, on the mat)
 # s at which each zone begins, in driving order: READ_SIGN, PAUSE, ENTERING, TURN, EXITING, CONTINUE.
-ZONE_BOUNDS_M = (READ_SIGN_LATEST_M,
-                 -(JUNCTION_CORNER_M + ROBOT_FRONT_M),
-                 -(CROSS_ROAD_EDGE_M + ROBOT_FRONT_M),
-                 -(CROSS_ROAD_EDGE_M / 2 + TURN_ZONE_EARLY_M),
-                 0.04,
-                 JUNCTION_CORNER_M)
+ZONE_BOUNDS_M = (READ_SIGN_LATEST_M, -0.65, -0.55, -0.20, 0.00, 0.30)   # EXITING 15 cm sooner than first measured (2026-11-15, on the mat)
+JUNCTION_CORNER_M = 0.28        # m before the centre where the road starts to widen into the rounded corners (course diagram; also the flare)
 ZONE_REF_X_M = 0.0              # m ahead of the rear axle of the point whose position decides the zone; 0 = the rear axle (the bounds above are written for it)
 SIGN_CUT_EDGE_PX = 8            # px (full frame); a sign box this close to the view's edge is being cut off
 SIGN_CUT_READINGS = 2           # sign readings in a row with no box, after one at the edge, that mean the sign is cut off
 FLARE_TO_CENTRE_M = 0.18        # m; MEASURED with tools/replay on junction_1-3 (medians 0.175, 0.195, 0.173): from where the flare test fires to the junction centre (it fires ~0.1 m past where the widening starts at ~0.28 m)
 ZONE_PAUSE_S = 2.0              # s stopped at each zone change, for the judge
-QUIZ_EXIT_M = 0.4               # m past the centre at which QUIZ_INTERSECTION goes back to IDLE
 LOCATION_START_FRAMES = 3       # frames in a row with a camera fix before a junction pass begins
-LOCATION_PASS_END_M = 1.0       # m; s at which a pass ends and the tracker waits for the next junction (>= QUIZ_EXIT_M)
+LOCATION_PASS_END_M = 1.0       # m; s at which a pass ends and the tracker waits for the next junction (the quiz drives on in LANE_FOLLOW)
 LOCATION_DR_CONF_M = 0.5        # m travelled (dashes or learned speed) since the last camera fix at which LocationObs.conf reaches 0
 LOCATION_SPEED_FRAMES = 30      # frames of dash travel the learned speed (m/s per unit of speed command) is taken over
 LOCATION_SPEED_MIN_CMD = 0.05   # speed command below which a frame doesn't teach the speed (stopped, judging pause)
 LOCATION_BACK_MAX_M = 0.1       # m; a camera fix putting s further back than this in a pass is ignored (the robot only goes forward)
 START_MODE = "DRIVE"            # name of a RunMode member
-# Side camera surface box (docs/quiz3_plan.md, stage 8), MEASURED 2026-11-15 on
-# junction_side_1-3 (tools/side_fixes.py). The side camera looks out to the
-# right; the top of its image is the ground nearest the robot. Its colours
-# are washed out (grass: green chromaticity 0.345, saturation ~20), so the
-# box is classed by the road mask alone: ROAD, or GRASS when it isn't road.
+# Side camera (docs/quiz3_plan.md, stage 8; wide view since 2026-11-15).
+# The side camera looks out to the right, the robot's body along the bottom
+# of its image. Across SIDE_BOX, a band through the middle of the view, the
+# road fraction ramps up as the corner's grass slides out of view (0.5 at
+# -0.25 m) and down as the far side's grass slides in (0.5 at +0.12 m):
+# MEASURED on recordings/truth_2 against the tape (tools/side_fixes.py
+# --tape), each crossing a single clean step. The washed-out colours (grass:
+# green chromaticity 0.345, saturation ~20) mean the band is judged by the
+# road mask alone.
 SIDE_CAM_ENABLED = True         # start the side camera if it opens (main.py carries on without it)
-SIDE_BOX = (220, 5, 90, 50)     # (x, y, w, h) in SIDE_SIZE px: top right, nearest the robot and least troubled by mat seams
-SIDE_ROAD_MIN_FRAC = 0.6        # road fraction of the box for ROAD
-SIDE_GRASS_MAX_FRAC = 0.2       # road fraction at or under which the box is GRASS; between: mixed (no class)
-SIDE_SURFACE_FRAMES = 2         # side frames in a row with the same class before the surface changes
-# Rear-axle s at which the box's surface becomes ROAD (the corner) and GRASS
-# again (leaving the cross road): means over junction_side_1-3, each within
-# about 4 cm (where the robot sits across the road moves them). Less precise
-# than dash odometry, so used only when the dashes have failed since the
-# last camera fix (estimation/location.py).
-SIDE_FIXES_M = {"ROAD": -0.18, "GRASS": 0.12}
-# Off: on junction_side_1-3 the fixes never improved the estimate. With a
-# learned speed the dashes-lost estimate stays within 1 cm (a side fix made
-# it 4-5 cm); when it has held still, s is too stale to gate out the false
-# ROAD changes that mat seams and shadows give before the junction.
-SIDE_FIXES_ENABLED = False
-SIDE_FIX_GATE_M = 0.12          # m; a side fix further than this from the current s is ignored (mat seams, shadows)
+SIDE_BOX = (0, 100, 320, 40)    # (x, y, w, h) in SIDE_SIZE px: the band across the middle of the view
+SIDE_ROAD_MIN_FRAC = 0.6        # road fraction of the band shown and logged as ROAD
+SIDE_GRASS_MAX_FRAC = 0.2       # road fraction at or under which it is GRASS; between: mixed
+SIDE_EDGE_FRAC = 0.5            # the band's road fraction crossing this is an edge (between frames, interpolated)
+# Rear-axle s at the band's edges: ENTRY (rising: the corner's grass leaving
+# the view, just before TURN) and EXIT (falling: the far side's grass coming
+# in, between EXITING and CONTINUE).
+SIDE_EDGES_M = {"ENTRY": -0.25, "EXIT": 0.12}
+# On: each edge resets s once per pass (the dashes undercount 2-6 cm through
+# the junction: truth_1, truth_2). Off: the tracker still reports how far
+# off the estimate was at each edge (terminal, loop log, display).
+SIDE_FIXES_ENABLED = True
+SIDE_FIX_GATE_M = 0.10          # m; an edge further than this from where the estimate puts the robot is ignored (mat seams, shadows)
+LOCATION_HISTORY_FRAMES = 30     # front frames of (t, s) kept to find the estimate at a side edge's time (1 s at 30 fps)
+SIDE_EDGE_MAX_GAP_S = 0.1       # s; a side edge is used only with front frames this close around it (else the estimate then is unknown)
+SIDE_CHECK_OK_CM = 3.0          # cm; a side check off by more is shown amber on the display
+# tools/side_fixes.py --tape: the robot held still at tape spots
+SIDE_TAPE_STEP_M = 0.10         # m between tape spots
+SIDE_TAPE_STILL_M = 0.005       # m; dash odometry moving less than this counts as held still
+SIDE_TAPE_HOLD_S = 1.5          # s; held still at least this long is a tape spot
 SIDE_CAM_FPS_MIN = 15           # fps; the side webcam gives 19 fps in MJPG
 SIDE_ROAD_COLOUR = (90, 90, 90)     # BGR annotation colours of the box: road,
 SIDE_GRASS_COLOUR = (80, 185, 63)   # grass,

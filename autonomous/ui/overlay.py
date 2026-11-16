@@ -3,7 +3,7 @@ lives here, so the robot's display and tools/replay.py can show identical
 debug views.
 
 TODO: tools/debug_draw.py is to be replaced by this module in a follow-up
-task (tools/replay.py and tools/tune_colors.py switch to draw_front_overlay).
+task (tools/replay.py switches to draw_front_overlay; tools/tune_colors.py has).
 replay already draws sign annotations with draw_annotations.
 
 Geometry comes in processed-image pixels (the 320 x 240 view each camera

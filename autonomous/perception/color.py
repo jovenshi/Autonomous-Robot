@@ -29,14 +29,22 @@ def mask_green(img, cfg):
     return passed.astype(np.uint8) * 255
 
 
-def mask_road(hsv, roi, cfg):
-    # Dark and unsaturated. The darkness threshold comes from Otsu on the
-    # region's V channel each frame, clamped to ROAD_V_T_MIN-ROAD_V_T_MAX.
+def road_v_cut(hsv, roi, cfg):
+    # The road's darkness threshold for this frame: Otsu on the region's V
+    # channel, clamped to ROAD_V_T_MIN-ROAD_V_T_MAX.
     x, y, w, h = roi
     v_roi = np.ascontiguousarray(hsv[y:y + h, x:x + w, 2])
     otsu, _ = cv2.threshold(v_roi, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    v_max = int(min(max(otsu, cfg.ROAD_V_T_MIN), cfg.ROAD_V_T_MAX))
-    return cv2.inRange(hsv, (0, 0, 0), (179, cfg.ROAD_S_MAX, v_max))
+    return int(min(max(otsu, cfg.ROAD_V_T_MIN), cfg.ROAD_V_T_MAX))
+
+
+def mask_road(hsv, roi, cfg, v_cut=None):
+    # Dark and unsaturated: S up to ROAD_S_MAX and V up to road_v_cut.
+    # v_cut: a threshold already worked out (tools/tune_colors.py checks
+    # sampled pixels against the shown frame's).
+    if v_cut is None:
+        v_cut = road_v_cut(hsv, roi, cfg)
+    return cv2.inRange(hsv, (0, 0, 0), (179, cfg.ROAD_S_MAX, v_cut))
 
 
 def mask_dash(img, cfg):

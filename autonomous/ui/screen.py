@@ -34,7 +34,6 @@ from ui.overlay import (AMBER, BG, GREEN, LINE, MUTED, PANEL, RED, TEXT, draw_an
                         draw_sign_panel, mark_stale)
 from ui.panels import (History, draw_banner, draw_chart, draw_header, draw_lane_gauge,
                        draw_preflight, draw_status, draw_steer_bar, preflight)
-from tools.calib_status import check_status
 from ui.text import draw_text
 
 VIEWS = ("drive", "camera", "diagnostic")
@@ -72,7 +71,6 @@ class Screen:
         self.side = None
         self.sign = None                 # last SignObs received (signs are read at SIGN_HZ)
         self.quit = False
-        self.camera = check_status(cfg)  # (ok, text); read once: no calibration runs during a drive
 
     def update(self, packet):
         # Called for every packet drained from the queue.
@@ -129,7 +127,7 @@ class Screen:
         inner = w - 2 * GAP
         draw_header(main, (0, 0, w, 96), packet)
         if packet.state == State.IDLE:
-            draw_preflight(main, (GAP, 104, inner, 190), preflight(packet, self.cfg, self.camera))
+            draw_preflight(main, (GAP, 104, inner, 190), preflight(packet, self.cfg))
         else:
             draw_lane_gauge(main, (GAP, 104, inner, 96), packet.lane, self.cfg)
             draw_steer_bar(main, (GAP, 240, inner, 28), packet.drive.steer, self.cfg)
@@ -189,8 +187,7 @@ class Screen:
     # ---------------------------------------------------------------- control column
 
     def _draw_column(self, frame, packet, view):
-        ready = packet is not None and all(ok for _, ok in preflight(packet, self.cfg,
-                                                                     self.camera))
+        ready = packet is not None and all(ok for _, ok in preflight(packet, self.cfg))
         _button(frame, self.layout["start"], (40, 95, 36) if ready else PANEL, "START",
                 "ready" if ready else "not ready", GREEN if not ready else TEXT)
         _button(frame, self.layout["stop"], (40, 40, 170), "STOP", "not an e-stop", TEXT)

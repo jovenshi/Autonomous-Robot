@@ -171,24 +171,25 @@ class CsiSource:
 class UsbSource:
     """Side camera: USB webcam through OpenCV's V4L2 backend."""
 
-    def __init__(self, device_path, size, fourcc, cfg):
+    def __init__(self, device_path, size, fourcc, cfg, capture_size=None):
         self.device_path = device_path   # /dev/v4l/by-id/..., never an index
-        self.size = size                 # (width, height)
+        self.size = size                 # (width, height) of the frames read() returns
+        self.capture_size = capture_size or size   # what the webcam is asked for (shrunk to size)
         self.fourcc = fourcc
         self.cfg = cfg
         self.cap = None
         self._lock = threading.Lock()
 
     def open(self):
-        # Opens by path; sets the pixel format (SIDE_CAM_FOURCC), size, fps and a one-frame buffer.
+        # Opens by path; sets the pixel format (SIDE_CAM_FOURCC), capture size, fps and a one-frame buffer.
         if self.device_path is None:
             raise ValueError("SIDE_CAM_DEVICE is not set in config.py")
         cap = cv2.VideoCapture(self.device_path, cv2.CAP_V4L2)
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open webcam at {self.device_path}")
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.size[0])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.size[1])
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.capture_size[0])
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.capture_size[1])
         cap.set(cv2.CAP_PROP_FPS, self.cfg.CAM_FPS)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, self.cfg.USB_AUTO_EXPOSURE_AUTO)
@@ -196,10 +197,15 @@ class UsbSource:
         self._warn_if_size_differs()
 
     def read(self):
-        # One BGR frame, or None if the read failed.
+        # One BGR frame at size, or None if the read failed. A larger
+        # capture is shrunk (INTER_AREA: averages, so the colours stay clean).
         with self._lock:
             ok, image = self.cap.read()
-        return image if ok else None
+        if not ok:
+            return None
+        if (image.shape[1], image.shape[0]) != tuple(self.size):
+            image = cv2.resize(image, tuple(self.size), interpolation=cv2.INTER_AREA)
+        return image
 
     def get_exposure(self):
         # From OpenCV properties. Many webcams report the last manual value
@@ -227,5 +233,5 @@ class UsbSource:
         # Webcams silently fall back to another size if one is unsupported.
         width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if (width, height) != tuple(self.size):
-            print(f"Webcam gave {width}x{height}, asked for {self.size[0]}x{self.size[1]}")
+        if (width, height) != tuple(self.capture_size):
+            print(f"Webcam gave {width}x{height}, asked for {self.capture_size[0]}x{self.capture_size[1]}")

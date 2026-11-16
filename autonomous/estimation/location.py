@@ -12,23 +12,33 @@ negative before it. On each new camera frame s is set from the best source:
      from dash travel over the last LOCATION_SPEED_FRAMES frames that were
      driven (not stopped), so it follows the battery.
   otherwise s holds ('held').
-The side camera adds two fixes (stage 8; off unless SIDE_FIXES_ENABLED): the surface in its box turning
-from GRASS to ROAD (the corner) and back to GRASS (past the cross road), at
-the s in SIDE_FIXES_M. They are less precise than dash odometry (about 4 cm
-between runs), so each is used once per pass and only when the estimate is
-'suspect': since its last camera fix some frame held still because neither
-the dashes nor a learned speed could move it. (With a learned speed, the
-estimate stays within 1 cm of the dashes' on junction_side_1-3 with the
-dashes removed from 0.4 m before the centre; a side fix made it 4-5 cm.) A side fix further than
-SIDE_FIX_GATE_M from s is ignored (a mat seam or shadow under the box).
+The side camera adds two fixes (stage 8) where the front camera can't see
+the junction any more and the dashes undercount (2-6 cm by the centre on
+truth_1 and truth_2): the road fraction of its band (SideResult.road_frac)
+crossing SIDE_EDGE_FRAC upwards (ENTRY, the corner's grass leaving its view)
+and downwards (EXIT, the far side's grass coming in), at the s in
+SIDE_EDGES_M. The crossing's time is interpolated between the two side
+frames either side of it, and the estimate at that time between the front
+frames around it (_s_at), so neither camera's frame rate nor the time since
+the edge counts. The difference is the estimate's error there; with
+SIDE_FIXES_ENABLED it is added to s, otherwise it is only reported
+(LocationObs.side_edge / side_error_m). Each edge is used once per pass, and
+one further than SIDE_FIX_GATE_M from the estimate is ignored (a mat seam or
+a shadow crossing the band).
 
 Motion is only counted when a camera frame arrives, from the frame before:
 counting it on every control loop as well would count it twice.
 
-Within a pass the robot only goes forward, so a camera fix that puts s more
-than LOCATION_BACK_MAX_M behind where it already is is ignored: inside the
-junction the far corners can read as a flare when the crossing line is
-missed (junction_3), and the mat's far end can too (junction_1).
+Within a pass the robot only goes forward, so a crossing-line fix that puts
+s more than LOCATION_BACK_MAX_M behind where it already is is ignored. The
+flare is trusted less: a flare fix is ignored once the crossing line has
+fixed s in the pass (the line is seen over the same stretch and is more
+precise), and a flare fix never moves s back at all. Inside the junction
+the far corners can read as a flare when the crossing line is missed
+(junction_3), and the mat's far end can too (junction_1); on the robot
+(run_20261115_175843) false flares 2-8 cm behind s, each within
+LOCATION_BACK_MAX_M, ratcheted s back 25 cm in a second on the approach and
+made every zone from PAUSE on late.
 
 A pass starts after LOCATION_START_FRAMES camera frames in a row with a fix,
 so one stray frame can't start one, and ends once s passes
@@ -74,6 +84,17 @@ def camera_fix(evidence, cfg):
     return None
 
 
+def band_edge(prev, cur, cfg):
+    # (edge name, time) if the band's road fraction crossed SIDE_EDGE_FRAC
+    # between two side frames given as (t, road_frac), else None. ENTRY
+    # going up (the corner's grass leaving the view), EXIT going down; the
+    # time is interpolated between the frames.
+    (t0, f0), (t1, f1), edge = prev, cur, cfg.SIDE_EDGE_FRAC
+    if (f0 < edge) == (f1 < edge):
+        return None
+    return ("ENTRY" if f1 > f0 else "EXIT"), t0 + (edge - f0) / (f1 - f0) * (t1 - t0)
+
+
 def dash_travel(prev, cur, cfg):
     # Metres moved forward between two frames' dash positions (m ahead,
     # either order), or None. Every pairing within -DASH_MAX_BACK_M to
@@ -101,8 +122,7 @@ class LocationTracker:
         self._cmd_s = 0.0                # speed command x s since that frame
         self._last_t = None
         self._side_seq = None
-        self._side_surface = None        # the box's settled surface
-        self._side_run = (None, 0)       # (surface, side frames in a row with it)
+        self._side_prev = None           # (t, road_frac) of the last side frame
         self.reset()
 
     def reset(self):
@@ -112,12 +132,14 @@ class LocationTracker:
         self.position = 0                # index into _ZONE_ORDER; never decreases in a pass
         self.guessed_m = 0.0             # metres on the learned speed since the last camera fix
         self.fix_run = 0
+        self.crossing_seen = False       # the crossing line has fixed s this pass
         self.sign_cut = False            # the sign has left the front camera's view
         self._sign_at_edge = False       # the last sign box seen touched the view's edge
         self._sign_gone = 0              # sign readings in a row with no box since then
         self._sign_seq = None
-        self.suspect = False             # held without dashes or speed since the last camera fix
-        self._side_used = set()          # side fixes used this pass
+        self._history = deque(maxlen=self.cfg.LOCATION_HISTORY_FRAMES)   # (front frame t, s)
+        self._side_used = set()          # side edges used this pass
+        self.side_edge, self.side_error_m = "", None   # the latest one and the estimate's error there
         self._obs = None
 
     def update(self, evidence, speed_cmd, now, sign=None, side=None):
@@ -131,35 +153,56 @@ class LocationTracker:
         self._last_t = now
         if self._is_new_frame(evidence, now):
             self._on_frame(evidence)
-        self._apply_side_fix(self._side_change(side, now))
+        self._apply_side_edge(self._side_edge(side, now))
         self._obs = self._observation(now)
         return self._obs
 
-    def _side_change(self, side, now):
-        # The surface the side box has just settled on after another one
-        # (SIDE_SURFACE_FRAMES frames in a row), or None.
-        if not is_fresh(side, now, self.cfg) or side.seq == self._side_seq:
+    def _side_edge(self, side, now):
+        # (edge name, time) if the band's road fraction crossed
+        # SIDE_EDGE_FRAC between the last side frame and this one, else None.
+        if not is_fresh(side, now, self.cfg) or side.seq == self._side_seq or side.road_frac is None:
             return None
         self._side_seq = side.seq
-        if side.surface is None:
-            self._side_run = (None, 0)       # mixed: the run is broken
-            return None
-        surface, n = self._side_run
-        self._side_run = (side.surface, n + 1 if side.surface == surface else 1)
-        if self._side_run[1] < self.cfg.SIDE_SURFACE_FRAMES or side.surface == self._side_surface:
-            return None
-        previous, self._side_surface = self._side_surface, side.surface
-        return side.surface if previous is not None else None
+        prev, self._side_prev = self._side_prev, (side.t, side.road_frac)
+        return band_edge(prev, self._side_prev, self.cfg) if prev is not None else None
 
-    def _apply_side_fix(self, surface):
-        # The side fix for this change, if it applies (see the docstring).
-        if not self.cfg.SIDE_FIXES_ENABLED or surface is None or self.s is None or not self.suspect:
+    def _apply_side_edge(self, edge):
+        # Measures the estimate's error at a side edge and, with
+        # SIDE_FIXES_ENABLED, corrects s by it (see the docstring).
+        if edge is None or self.s is None or edge[0] in self._side_used:
             return
-        fix = self.cfg.SIDE_FIXES_M.get(surface.name)
-        if fix is None or surface in self._side_used or abs(fix - self.s) > self.cfg.SIDE_FIX_GATE_M:
+        then = self._s_at(edge[1])
+        if then is None:
             return
-        self._side_used.add(surface)
-        self.s, self.source, self.guessed_m, self.suspect = fix, "side", 0.0, False
+        error = self.cfg.SIDE_EDGES_M[edge[0]] - then
+        if abs(error) > self.cfg.SIDE_FIX_GATE_M:
+            return
+        self._side_used.add(edge[0])
+        self.side_edge, self.side_error_m = edge[0], error
+        if self.cfg.SIDE_FIXES_ENABLED:
+            self.s += error
+            self.source, self.guessed_m = "side", 0.0
+            self._history = deque(((t, s + error) for t, s in self._history), self._history.maxlen)
+
+    def _s_at(self, t):
+        # The estimate at time t: interpolated between the front frames
+        # around it, carried on at the last frames' rate up to
+        # SIDE_EDGE_MAX_GAP_S after the newest. None if t is before the
+        # history, or the front frames around it are further apart than
+        # SIDE_EDGE_MAX_GAP_S (the front camera stalled: straight_3 has 3 s
+        # gaps, over which the estimate is unknown).
+        if len(self._history) < 2 or t < self._history[0][0]:
+            return None
+        ts, ss = zip(*self._history)
+        gap = self.cfg.SIDE_EDGE_MAX_GAP_S
+        if t > ts[-1]:
+            if t - ts[-1] > gap or ts[-1] - ts[-2] > gap or ts[-1] <= ts[-2]:
+                return None
+            return ss[-1] + (ss[-1] - ss[-2]) / (ts[-1] - ts[-2]) * (t - ts[-1])
+        i = bisect.bisect_left(ts, t)
+        if i > 0 and ts[i] - ts[i - 1] > gap:
+            return None
+        return float(np.interp(t, ts, ss))
 
     def get(self):
         return self._obs
@@ -197,16 +240,27 @@ class LocationTracker:
         if self.s is None:
             if fix is not None and self.fix_run >= self.cfg.LOCATION_START_FRAMES:
                 self.s, self.source = fix
+                self.crossing_seen = fix[1] == "crossing"
+                self._history.append((evidence.t, self.s))
             return
         self.s += moved
-        if fix is not None and fix[0] >= self.s - self.cfg.LOCATION_BACK_MAX_M:
-            self.s, self.source, self.guessed_m, self.suspect = fix[0], fix[1], 0.0, False
+        if self._accepts(fix):
+            self.s, self.source, self.guessed_m = fix[0], fix[1], 0.0
+            self.crossing_seen = self.crossing_seen or fix[1] == "crossing"
         else:
             self.source = how
             self.guessed_m += moved if how == "speed" else 0.0
-            self.suspect = self.suspect or how == "held"
+        self._history.append((evidence.t, self.s))
         if self.s >= self.cfg.LOCATION_PASS_END_M:
             self.reset()
+
+    def _accepts(self, fix):
+        # Whether a camera fix replaces s (see the docstring).
+        if fix is None:
+            return False
+        if fix[1] == "flare":
+            return not self.crossing_seen and fix[0] >= self.s
+        return fix[0] >= self.s - self.cfg.LOCATION_BACK_MAX_M
 
     def _motion(self, evidence):
         # (metres moved since the last frame, 'dashes' | 'speed' | 'held');
@@ -233,4 +287,5 @@ class LocationTracker:
         conf = max(0.0, 1.0 - self.guessed_m / self.cfg.LOCATION_DR_CONF_M)
         return LocationObs(zone=_ZONE_ORDER[pos], sign_read_ready=pos >= 1,
                            pause_point_ready=pos >= 2, turn_point_ready=pos >= 4,
-                           dist_to_centre_m=-self.s, conf=conf, source=self.source, t=now)
+                           dist_to_centre_m=-self.s, conf=conf, source=self.source, t=now,
+                           side_edge=self.side_edge, side_error_m=self.side_error_m)

@@ -219,6 +219,7 @@ class SideResult:
     seq: int
     surface: Optional[Surface] = None  # in SIDE_BOX; None when mixed
     annotations: tuple[Annotation, ...] = ()
+    road_frac: Optional[float] = None  # road fraction of SIDE_BOX (the location tracker's edges)
 
 
 # ---------------------------------------------------------------- IMU
@@ -261,6 +262,8 @@ class LocationObs:
     conf: float                        # 0-1
     source: str                        # 'crossing', 'flare', 'side', 'dashes', 'speed' or 'none'
     t: float
+    side_edge: str = ""                # the side camera's latest edge this pass ('ENTRY'/'EXIT'), or ''
+    side_error_m: Optional[float] = None   # at that edge, its s minus the estimate's (+ = estimate was behind)
 
 
 # ---------------------------------------------------------------- behaviour

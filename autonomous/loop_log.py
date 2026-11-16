@@ -12,7 +12,9 @@ yaw_rate_dps for damping only when imu_valid is 1. mode is the RunMode;
 zone, s (m from the junction centre, negative before) and loc_source come
 from the LocationObs, empty with no junction pass under way; sign is the
 voted sign; side_surface is the side camera's class of SIDE_BOX (ROAD,
-GRASS, empty when mixed or no side camera).
+GRASS, empty when mixed or no side camera); side_edge and side_err_m are
+the side camera's latest edge this pass (ENTRY, EXIT) and, there, its s
+minus the estimate's (+ = the estimate was behind), empty until one.
 
 tools/weave_report.py reads these files.
 """
@@ -22,7 +24,7 @@ import os
 
 COLUMNS = ("t", "state", "lateral_err_m", "heading_err_rad", "lane_conf",
            "yaw_deg", "yaw_rate_dps", "imu_valid", "steer", "speed",
-           "mode", "zone", "s", "loc_source", "sign", "side_surface")
+           "mode", "zone", "s", "loc_source", "sign", "side_surface", "side_edge", "side_err_m")
 GAINS = ("KD_YAW", "KP_LAT", "KH", "CRUISE_SPEED")
 
 
@@ -56,6 +58,7 @@ class LoopLog:
             _cell(drive.steer), _cell(drive.speed),
             *_quiz_cells(mode, location, vote),
             side_surface.name if side_surface is not None else "",
+            *_side_cells(location),
         ))
 
     def close(self):
@@ -73,6 +76,13 @@ def _quiz_cells(mode, location, vote):
             _cell(-location.dist_to_centre_m) if in_pass else "",
             location.source if in_pass else "",
             vote.sign.name if vote is not None else "")
+
+
+def _side_cells(location):
+    # side_edge, side_err_m
+    if location is None or location.dist_to_centre_m is None or not location.side_edge:
+        return "", ""
+    return location.side_edge, _cell(location.side_error_m)
 
 
 def _cell(x):

@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import config  # noqa: E402
 from robot_types import Frame
 from test_perception import BANDS, CX, H, W, scene
-from tools import record, replay, tune_colors
+from tools import config_writer, record, replay, tune_colors
 from tools.recording import RecordingWriter, iter_frames, read_index, read_meta
 
 
@@ -110,6 +110,45 @@ def test_record_saves_only_while_recording(tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------- tune_colors
 
+class FakeFrames:
+    """Recorded-style frames from a list, for TuneApp."""
+    live = False
+
+    def __init__(self, frames):
+        self.frames, self.index = frames, 0
+
+    def latest(self):
+        return self.frames[self.index] if self.frames else None
+
+    def step(self, delta):
+        self.index = min(max(self.index + delta, 0), len(self.frames) - 1)
+
+    def label(self):
+        return f"{self.index + 1} / {len(self.frames)}"
+
+
+def scene_frame():
+    img = cv2.resize(scene(), (640, 480), interpolation=cv2.INTER_NEAREST)
+    return Frame(img, 0.0, 1, "front")
+
+
+@pytest.fixture
+def tune_app(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "FRONT_BANDS", BANDS)
+    target = tmp_path / "config.py"
+    target.write_text(open(config_writer.config_path()).read())
+    monkeypatch.setattr(config_writer, "config_path", lambda: str(target))
+    app = tune_colors.TuneApp(config, FakeFrames([scene_frame()]))
+    assert app.draw().shape == (480, 800, 3)
+    return app
+
+
+def screen_xy(app, x, y):
+    # Lane-size pixel -> where it is drawn on a step screen.
+    scale = app.shown[2]
+    return int((x + 0.5) * scale), int((y + 0.5) * scale)
+
+
 def test_config_with_overrides_only_given_values():
     cfg = tune_colors.config_with({"YELLOW_H_MIN": 5})
     assert cfg.YELLOW_H_MIN == 5 and cfg.YELLOW_H_MAX == config.YELLOW_H_MAX
@@ -117,22 +156,115 @@ def test_config_with_overrides_only_given_values():
     assert cfg.CONTROL_HZ == config.CONTROL_HZ
 
 
-def test_render_grid_uses_real_masks(monkeypatch):
-    monkeypatch.setattr(config, "FRONT_BANDS", BANDS)
-    frame = Frame(cv2.resize(scene(), (640, 480), interpolation=cv2.INTER_NEAREST), 0.0, 1, "front")
-    grid, masks = tune_colors.render(frame, tune_colors.config_with({}))
-    assert grid.shape == (2 * H, 3 * W, 3)
-    assert masks.yellow[120, int(CX)] == 255
-    narrow = tune_colors.config_with({"YELLOW_H_MIN": 100, "YELLOW_H_MAX": 120})
-    _, masks = tune_colors.render(frame, narrow)
-    assert not masks.yellow.any()
+def test_fit_covers_every_tap_with_margins():
+    fit = tune_colors.fit_values("yellow", [(25, 200, 180), (28, 150, 120)], [])
+    assert fit == {"YELLOW_H_MIN": 25 - tune_colors.H_MARGIN,
+                   "YELLOW_H_MAX": 28 + tune_colors.H_MARGIN,
+                   "YELLOW_S_MIN": 150 - tune_colors.SV_MARGIN,
+                   "YELLOW_V_MIN": int(120 * tune_colors.YELLOW_V_FRAC)}
+    red = tune_colors.fit_values("red", [(2, 160, 150), (176, 140, 150)], [])
+    assert red["RED_H_LOW_MAX"] == 2 + tune_colors.H_MARGIN
+    assert red["RED_H_HIGH_MIN"] == 176 - tune_colors.H_MARGIN
+    road = tune_colors.fit_values("road", [(0, 20, 60)], [(0, 20, 200)])
+    assert road["ROAD_V_T_MIN"] < road["ROAD_V_T_MAX"]
+    overlap = tune_colors.fit_values("road", [(0, 20, 100)], [(0, 20, 105)])
+    assert overlap["ROAD_V_T_MIN"] == overlap["ROAD_V_T_MAX"] == 102
+    assert tune_colors.fit_values("red", [], []) == {}
 
 
-def test_render_without_bands(monkeypatch):
+def test_tidy_clamps_and_keeps_min_below_max():
+    values = {name: getattr(config, name) for name in tune_colors.PARAMS}
+    values.update(YELLOW_H_MIN=40, YELLOW_H_MAX=30, RED_S_MIN=300)
+    tune_colors.tidy(values)
+    assert values["YELLOW_H_MAX"] == 40 and values["RED_S_MIN"] == 255
+    values.update(ROAD_V_T_MIN=90, ROAD_V_T_MAX=80)
+    tune_colors.tidy(values, moved="ROAD_V_T_MAX")
+    assert values["ROAD_V_T_MIN"] == 80
+
+
+def test_taps_set_values_and_every_tap_passes(tune_app):
+    app = tune_app
+    app.tap(screen_xy(app, int(CX), 120))                     # the yellow line
+    assert app.values["YELLOW_H_MIN"] != config.YELLOW_H_MIN or \
+        app.values["YELLOW_S_MIN"] != config.YELLOW_S_MIN
+    app.draw()
+    cfg = app.cfg_now()
+    assert app._tap_results(app.step, cfg, app.taps["yellow"], None) == [True]
+    app.press("next")
+    assert app.step.key == "road"
+    app.draw()
+    app.tap(screen_xy(app, 100, 120))                         # road
+    app.press("mode:not")
+    app.tap(screen_xy(app, 10, 120))                          # grass beside it
+    assert [t.miss for t in app.taps["road"]] == [False, True]
+    app.draw()
+    masks = app.shown[1]
+    assert masks.road[120, 100] == 255 and masks.road[120, 10] == 0
+    app.press("next")
+    assert app.step.key == "red"
+    app.press("next")                                         # no sign: keep red
+    assert app.page == "review"
+    app.draw()
+    assert "apply" in {z.name for z in app.zones}
+
+
+def test_undo_reset_and_adjust(tune_app):
+    app = tune_app
+    app.tap(screen_xy(app, int(CX), 120))
+    app.press("undo")
+    assert app.taps["yellow"] == [] and app.changed() == {}
+    app.press("chip:0")
+    app.press("adj:10")
+    app.press("adj:10")
+    assert app.values["YELLOW_H_MIN"] == config.YELLOW_H_MIN + 20
+    assert app.values["YELLOW_H_MAX"] >= app.values["YELLOW_H_MIN"]
+    app.press("view:mask")
+    app.draw()
+    app.press("reset")
+    assert app.changed() == {}
+
+
+def test_apply_writes_only_the_changed_values(tune_app):
+    app = tune_app
+    app.press("chip:2")
+    app.press("adj:-10")
+    for _ in tune_colors.STEPS:
+        app.press("next")
+    assert app.page == "review"
+    app.press("apply")
+    assert app.page == "applied"
+    app.draw()
+    text = open(config_writer.config_path()).read()
+    assert f"YELLOW_S_MIN = {config.YELLOW_S_MIN - 10}" in text
+    assert f"YELLOW_H_MIN = {config.YELLOW_H_MIN}" in text
+    assert os.path.exists(app.backup)
+    app.press("done")
+    assert app.done
+
+
+def test_quit_without_apply_prints_values(tune_app, capsys):
+    tune_app.press("adj:1")
+    tune_app.press("quit")
+    assert tune_app.done
+    assert f"YELLOW_H_MIN = {config.YELLOW_H_MIN + 1}" in capsys.readouterr().out
+
+
+def test_recorded_frames_step_and_waiting_camera(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "FRONT_BANDS", None)
-    frame = Frame(scene(), 0.0, 1, "front")
-    grid, _ = tune_colors.render(frame, tune_colors.config_with({}))
-    assert grid.shape == (2 * H, 3 * W, 3)
+    make_recording(tmp_path / "rec", [0, 10, 20])
+    frames = tune_colors.RecordingFrames(str(tmp_path / "rec"))
+    app = tune_colors.TuneApp(config, frames)
+    app.draw()
+    app.key("right")
+    app.press("frame:1")
+    assert frames.index == 2 and frames.label() == "3 / 3"
+    app.key("enter")
+    app.key("enter")
+    app.key("enter")
+    assert app.page == "review"
+    app.draw()                                    # no FRONT_BANDS: says so, no crash
+    empty = tune_colors.TuneApp(config, FakeFrames([]))
+    assert empty.draw().shape == (480, 800, 3)
 
 
 # ---------------------------------------------------------------- replay

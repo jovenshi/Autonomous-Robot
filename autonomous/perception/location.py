@@ -57,6 +57,17 @@ def row_to_metres(row, cfg):
     return float(np.interp(row, rows, forward))
 
 
+def yellow_on_road(yellow_mask, road_mask):
+    # The yellow with road on both sides of it in its row: painted lines
+    # lie on the road; yellow outside the road's edges is grass. (The
+    # yellow test can take in grass a shade yellower than usual: the next
+    # mat's beyond a seam, straight_4, which then read as a junction.)
+    road = road_mask > 0
+    left = np.maximum.accumulate(road, axis=1)
+    right = np.maximum.accumulate(road[:, ::-1], axis=1)[:, ::-1]
+    return np.where(left & right, yellow_mask, 0).astype(yellow_mask.dtype)
+
+
 def crossing_line_row(yellow_mask, road_mask, cfg):
     # Centre row of the nearest (lowest) run of rows where yellow, with dash
     # gaps closed, covers at least CROSS_LINE_MIN_FRAC of the width, on road
@@ -171,8 +182,9 @@ def process_location(masks, cfg, t, seq, line_px=None):
     # seen and a point on each of our dashes. line_px: the lane's fitted
     # line (FrontLaneObs.line_px), or None (no dashes). side_surface stays
     # None until the side camera's box (stage 8).
-    cross_row = crossing_line_row(masks.yellow, masks.road, cfg)
-    flare = flare_row(road_widening(masks.road, masks.yellow, cfg), cfg)
+    on_road = yellow_on_road(masks.yellow, masks.road)
+    cross_row = crossing_line_row(on_road, masks.road, cfg)
+    flare = flare_row(road_widening(masks.road, on_road, cfg), cfg)
     cross_m, flare_m = row_to_metres(cross_row, cfg), row_to_metres(flare, cfg)
     if cross_m is not None and flare_m is not None and flare_m >= cross_m:
         flare, flare_m = None, None      # the flare is always before the centre: a false one

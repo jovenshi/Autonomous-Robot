@@ -50,7 +50,7 @@ def test_rows_hold_the_loop_values(tmp_path):
     log.close()
     _, rows = read(log.path)
     assert rows[1] == ["12.3457", "LANE_FOLLOW", "0.012", "-0.03", "0.9",
-                       "4.5", "-12.25", "1", "-0.125", "0.7", "", "", "", "", "", ""]
+                       "4.5", "-12.25", "1", "-0.125", "0.7", "", "", "", "", "", "", "", ""]
 
 
 def test_missing_values_are_empty_cells(tmp_path):
@@ -61,7 +61,7 @@ def test_missing_values_are_empty_cells(tmp_path):
     log.close()
     _, rows = read(log.path)
     assert rows[1] == ["1.0000", "LANE_FOLLOW", "", "", "0", "", "", "0", "0", "0.3",
-                       "", "", "", "", "", ""]
+                       "", "", "", "", "", "", "", ""]
     assert rows[2][7] == "0"                       # invalid sample: imu_valid 0
 
 
@@ -80,8 +80,20 @@ def test_quiz_columns(tmp_path):
     named = dict(zip(COLUMNS, rows[1]))
     assert (named["mode"], named["zone"], named["s"], named["loc_source"], named["sign"]) == \
         ("QUIZ_INTERSECTION", "PAUSE", "-0.25", "dashes", "LEFT")
-    assert rows[2][-6:] == ["DRIVE", "", "", "", "", "ROAD"]
-    assert named["side_surface"] == ""
+    assert rows[2][-8:] == ["DRIVE", "", "", "", "", "ROAD", "", ""]
+    assert named["side_surface"] == "" and named["side_edge"] == "" and named["side_err_m"] == ""
+
+
+def test_side_check_columns(tmp_path):
+    # The side camera's latest edge this pass and the estimate's error there.
+    loc = LocationObs(Zone.TURN, True, True, True, 0.1, 1.0, "side", 0.0,
+                      side_edge="ENTRY", side_error_m=0.042)
+    log = LoopLog(str(tmp_path), config, start=START)
+    log.write(1.0, State.CROSS, lane(), imu(), DriveCmd(0.3, 0.0), RunMode.QUIZ_INTERSECTION, loc)
+    log.close()
+    _, rows = read(log.path)
+    named = dict(zip(COLUMNS, rows[1]))
+    assert (named["side_edge"], named["side_err_m"]) == ("ENTRY", "0.042")
 
 
 def test_rows_are_buffered_until_close(tmp_path):

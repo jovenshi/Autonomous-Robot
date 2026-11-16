@@ -240,7 +240,8 @@ def test_zone_positions_follow_the_bounds():
     edges = (-1.0,) + config.ZONE_BOUNDS_M
     for i, s in enumerate(edges):
         assert zone_position(s + 0.001, config) == i, order[i]
-    assert zone_position(-0.4, cfg_with(ZONE_REF_X_M=0.3)) == 3     # reference point ahead
+    entering = (config.ZONE_BOUNDS_M[2] + config.ZONE_BOUNDS_M[3]) / 2 - 0.3
+    assert zone_position(entering, cfg_with(ZONE_REF_X_M=0.3)) == 3   # reference point ahead
 
 
 def test_flare_fix_adds_flare_to_centre():
@@ -438,12 +439,68 @@ def test_real_straights_see_no_cue():
         assert found[seq].crossing_dist_m is None and found[seq].flare_dist_m is None, seq
 
 
+SEAM_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "seam")
+
+
+@pytest.mark.parametrize("name", sorted(os.listdir(SEAM_DATA)))
+@pytest.mark.parametrize("h_max", [30, 34])
+def test_mat_seam_on_a_straight_is_no_junction(name, h_max):
+    # straight_4: a dark seam across the mat, the next mat's grass a shade
+    # yellower. At YELLOW_H_MAX 34 that grass passes the yellow test; only
+    # yellow inside the road counts for the junction cues, so the seam is
+    # not a flare or a crossing line either way.
+    import cv2
+    cfg = cfg_with(YELLOW_H_MAX=h_max)
+    frame = Frame(cv2.imread(os.path.join(SEAM_DATA, name)), 0.0, 1, "front")
+    ev = process_location(make_front_masks(frame, cfg), cfg, 0.0, 1)
+    assert ev.flare_dist_m is None and ev.crossing_dist_m is None
+
+
+def test_yellow_on_road_keeps_only_yellow_between_road():
+    from perception.location import yellow_on_road
+    road = np.zeros((3, 10), np.uint8)
+    road[:, 2:8] = 255
+    yellow = np.zeros((3, 10), np.uint8)
+    yellow[0, 4:6] = 255                 # our line, on the road
+    yellow[1, 0:10] = 255                # grass and road alike
+    yellow[2, 8:10] = 255                # grass beside the road
+    kept = yellow_on_road(yellow, road)
+    assert kept[0].tolist() == yellow[0].tolist()
+    assert np.flatnonzero(kept[1]).tolist() == list(range(2, 8))
+    assert not kept[2].any()
+
+
 def test_tracker_ignores_a_fix_behind_the_robot():
     tracker, seq = started(config, s=-0.85)
     obs = tracker.update(ev(flare=0.83, seq=seq + 1), 0.0, 0.0)     # would put s at -1.01
     assert obs.dist_to_centre_m == pytest.approx(0.85)
     obs = tracker.update(ev(cross=0.90, seq=seq + 2), 0.0, 0.0)     # within LOCATION_BACK_MAX_M
     assert obs.dist_to_centre_m == pytest.approx(0.90)
+
+
+def test_false_flares_cannot_ratchet_s_back():
+    # run_20261115_175843: the crossing line put s at -1.03, then flares
+    # 2-8 cm behind (each within LOCATION_BACK_MAX_M) pulled it to -1.17.
+    tracker, seq = started(config, s=-1.03)
+    for i, flare in enumerate((0.92, 0.96, 0.99)):                 # s -1.10, -1.14, -1.17
+        obs = tracker.update(ev(flare=flare, seq=seq + 1 + i), 0.0, 0.0)
+        assert obs.dist_to_centre_m == pytest.approx(1.03)
+    obs = tracker.update(ev(flare=0.70, seq=seq + 9), 0.0, 0.0)     # ahead: still ignored
+    assert obs.dist_to_centre_m == pytest.approx(1.03) and obs.source != "flare"
+
+
+def test_flare_moves_s_forward_only_before_the_crossing_line():
+    tracker, seq = LocationTracker(config), 0
+    for _ in range(config.LOCATION_START_FRAMES):                  # a pass begun on the flare
+        seq += 1
+        tracker.update(ev(flare=1.0, seq=seq), 0.0, 0.0)
+    s0 = -(1.0 + config.FLARE_TO_CENTRE_M)
+    obs = tracker.update(ev(flare=1.05, seq=seq + 1), 0.0, 0.0)     # behind: ignored
+    assert -obs.dist_to_centre_m == pytest.approx(s0)
+    obs = tracker.update(ev(flare=0.95, seq=seq + 2), 0.0, 0.0)     # ahead: used
+    assert obs.source == "flare" and -obs.dist_to_centre_m == pytest.approx(s0 + 0.05)
+    obs = tracker.update(ev(cross=1.2, seq=seq + 3), 0.0, 0.0)      # the line, within the allowance
+    assert obs.source == "crossing" and obs.dist_to_centre_m == pytest.approx(1.2)
 
 
 SEQ_REC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "junction_seq")

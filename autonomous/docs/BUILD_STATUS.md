@@ -224,7 +224,7 @@ Status key: **Done** = exists and matches the design. **Partial** = exists but p
 | `Screen.handle_input(events)` | **Done** | |
 | Views: Status, Front, Side, Split (default) | **Differs** | The views are DRIVE (default: gauge, steer bar, pre-flight, strip chart), CAMERA (front with a side inset) and DIAGNOSTIC (every number). `UI_START_VIEW` is `"drive"`, not `'split'`. |
 | Headless option (`UI_ENABLED = False`) | **Done** | |
-| `tools/replay.py` uses `ui/overlay.py` | **Partial** | Replay draws sign and location annotations with `ui/overlay.draw_annotations`, but the lane still with the stop-gap `tools/debug_draw.py`, as does `tune_colors`. |
+| `tools/replay.py` uses `ui/overlay.py` | **Partial** | Replay draws sign and location annotations with `ui/overlay.draw_annotations`, but the lane still with the stop-gap `tools/debug_draw.py`. `tune_colors` draws with `ui/overlay.py`. |
 
 ### main.py
 
@@ -242,7 +242,7 @@ Status key: **Done** = exists and matches the design. **Partial** = exists but p
 | --- | --- | --- |
 | `tools/record.py` | **Partial** | Front camera, and with `--side` the side camera into `<out>/side/` on the same clock. No IMU samples. |
 | `tools/replay.py` | **Partial** | Front lane → `fuse_lane` → `drive_for_state(LANE_FOLLOW)` → `mix`, plus the sign reader (ROI, box, crop, label, scores) and location (cues, dash points, s and zone from a `LocationTracker`, and the measured `FLARE_TO_CENTRE_M`). No behaviour, side camera or IMU. `--save` writes pictures without a desktop. |
-| `tools/tune_colors.py` | **Partial** | Sliders for yellow, road, white and red. Green (`GREEN_CHROM_MIN`, `DARK_SUM_MIN`) isn't tunable, and side-camera recordings aren't supported. |
+| `tools/tune_colors.py` | **Partial** | Guided touch screens, live camera or a recording: yellow, road, PAUSE red. Tap the colour to set the values, fine-tune with -/+, APPLY writes `config.py`. White (`WHITE_*`) is unused and not offered. Green (`GREEN_CHROM_MIN`, `DARK_SUM_MIN`) isn't tunable, and side-camera recordings aren't supported. |
 | `tools/calibrate.py` (front: fit, check, lens) | **Done** | |
 | `tools/calibrate.py` side values (`SIDE_TARGET_PX`, `SIDE_M_PER_PX`, `SIDE_CAM_X_M`, `SIDE_ROAD_ON_LEFT`) | **Missing** | The design defers this to the side camera build, but its build step 2 needs it. |
 | `tools/calib_ui.py` (session, `--check`, `--lens`, `--resume`, REFIT) | **Done** | |
@@ -491,7 +491,7 @@ Dependencies first, core driving path before tools. Each batch is one pull reque
 **PR 9: Recording and replay for two cameras and the IMU.**
 - `record.py`: side stream and IMU samples with timestamps; recording format v2 (`frames.csv` per camera, `imu.csv`).
 - `replay.py`: full path (perception both cameras → fusion → road yaw → behaviour → drive → mix) with the motors stubbed, drawing with `ui/overlay.py`.
-- Switch `tune_colors.py` to `ui/overlay.py`; delete `tools/debug_draw.py`.
+- Switch `replay.py`'s lane drawing to `ui/overlay.py`; delete `tools/debug_draw.py`.
 - Depends on PR 2. In practice **start this right after PR 2**: PR 3's σ values and every later replay check need these recordings.
 
 **PR 10: Side camera calibration.**
@@ -500,7 +500,7 @@ Dependencies first, core driving path before tools. Each batch is one pull reque
 - Depends on PR 2 and PR 9.
 
 **PR 11: Colour tuning for every mask.**
-- `tune_colors.py`: green (`GREEN_CHROM_MIN`, `DARK_SUM_MIN`), white and red sliders; side-camera recordings.
+- `tune_colors.py`: a green step (`GREEN_CHROM_MIN`, `DARK_SUM_MIN`) on the side camera.
 - Depends on PR 9.
 
 **PR 12: Sign training tools.**

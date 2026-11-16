@@ -84,10 +84,16 @@ def quiz_rows(packet, cfg):
         return rows
     if loc.dist_to_centre_m is None:
         return rows + [("zone", "no junction yet", MUTED)]
-    return rows + [("zone", cfg.ZONE_PHRASES[loc.zone.name], YELLOW),
-                   ("s (from centre)", f"{-loc.dist_to_centre_m:+.2f} m", TEXT),
-                   ("location from", loc.source, TEXT),
-                   ("location conf", f"{loc.conf:.2f}", TEXT if loc.conf >= 0.5 else AMBER)]
+    rows += [("zone", cfg.ZONE_PHRASES[loc.zone.name], YELLOW),
+             ("s (from centre)", f"{-loc.dist_to_centre_m:+.2f} m", TEXT),
+             ("location from", loc.source, TEXT),
+             ("location conf", f"{loc.conf:.2f}", TEXT if loc.conf >= 0.5 else AMBER)]
+    if loc.side_edge:
+        # The side camera's check: how far the estimate was off at its edge.
+        err = loc.side_error_m * 100
+        rows.append(("side check", f"{loc.side_edge.lower()} {err:+.1f} cm",
+                     TEXT if abs(err) <= cfg.SIDE_CHECK_OK_CM else AMBER))
+    return rows
 
 
 def draw_lane_gauge(img, rect, lane, cfg):
@@ -217,10 +223,10 @@ def health_rows(packet):
 
 # ---------------------------------------------------------------- pre-flight
 
-def preflight(packet, cfg, camera=None):
+def preflight(packet, cfg):
     # Go/no-go list from the packet: [(label, ok)]. Informational only;
-    # Behaviour decides whether START is accepted. camera: (ok, text) from
-    # tools/calib_status.check_status, added last when given.
+    # Behaviour decides whether START is accepted. The camera calibration
+    # check is printed in the terminal only (main.py, startup_line).
     imu = packet.imu
     checks = [("IMU valid", imu is not None and imu.valid),
               ("gyro calibrated", imu is not None and imu.calib_gyro == 3)]
@@ -229,8 +235,6 @@ def preflight(packet, cfg, camera=None):
     if not packet.fps:
         checks.append(("camera fps", False))
     checks.append(("motor serial", HealthWarning.MOTOR_SERIAL_ERROR not in packet.warnings))
-    if camera is not None:
-        checks.append((camera[1], camera[0]))
     return checks
 
 

@@ -10,7 +10,8 @@ APPROACH, CROSS and REACQUIRE, driven by the LocationObs:
     LANE_FOLLOW -> APPROACH in READ_SIGN and PAUSE
                 -> CROSS (hold_steer on road_yaw) in ENTERING, TURN, EXITING
                 -> REACQUIRE in CONTINUE after the junction
-                -> IDLE once QUIZ_EXIT_M past the centre.
+                -> LANE_FOLLOW once the lane is found again, on to the next
+                   junction (the run goes on until STOP).
 At every zone change while moving, `paused` is set for ZONE_PAUSE_S
 (drive_for_state stops the robot) so the judge can check the zone. In DRIVE
 mode the robot stays in LANE_FOLLOW as before; QUIZ_SIGNS stays in IDLE.
@@ -159,8 +160,6 @@ class Behaviour:
         loc = self.location
         if loc is None or loc.dist_to_centre_m is None:
             return None
-        if loc.turn_point_ready and loc.dist_to_centre_m <= -self.cfg.QUIZ_EXIT_M:
-            return State.IDLE
         if loc.zone in _APPROACH_ZONES:
             return State.APPROACH
         if loc.zone in _CROSS_ZONES:
@@ -192,11 +191,11 @@ class Behaviour:
         return State.IDLE
 
     def _on_lane_follow(self, front, side, lane, road_yaw, sign, imu, now):
-        # Intersection quiz: on to APPROACH (or straight to CROSS, or IDLE
-        # when the run is over) as the location calls for. After REACQUIRE
-        # the robot may be back here before QUIZ_EXIT_M.
+        # Intersection quiz: on to APPROACH (or straight to CROSS) as the
+        # location calls for. After REACQUIRE the robot drives on here,
+        # through CONTINUE, to the next junction.
         target = self._quiz_target()
-        if target in (State.APPROACH, State.CROSS, State.IDLE):
+        if target in (State.APPROACH, State.CROSS):
             return target
         return State.LANE_FOLLOW
 
@@ -211,18 +210,15 @@ class Behaviour:
         # REACQUIRE. After CROSS_TIMEOUT_S of driving (pauses not counted),
         # or if the pass is lost, REACQUIRE: the lane controller takes over.
         target = self._quiz_target()
-        if target in (State.REACQUIRE, State.IDLE):
+        if target == State.REACQUIRE:
             return target
         if target is None or self._moving_s > self.cfg.CROSS_TIMEOUT_S:
             return State.REACQUIRE
         return State.CROSS
 
     def _on_reacquire(self, front, side, lane, road_yaw, sign, imu, now):
-        # Lane control at REACQUIRE_SPEED; IDLE once QUIZ_EXIT_M past the
-        # centre, LANE_FOLLOW after REACQUIRE_FRAMES loops in a row with
-        # lane conf >= REACQUIRE_CONF.
-        if self._quiz_target() == State.IDLE:
-            return State.IDLE
+        # Lane control at REACQUIRE_SPEED; LANE_FOLLOW after
+        # REACQUIRE_FRAMES loops in a row with lane conf >= REACQUIRE_CONF.
         confident = lane is not None and lane.conf >= self.cfg.REACQUIRE_CONF
         self._reacquire_run = self._reacquire_run + 1 if confident else 0
         if self._reacquire_run >= self.cfg.REACQUIRE_FRAMES:

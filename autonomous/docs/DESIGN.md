@@ -799,7 +799,7 @@ Every block can be tested without the robot moving, by replaying recorded runs; 
 | --- | --- |
 | `tools/record.py` | Drive or push the robot slowly and log both camera streams and IMU samples with timestamps |
 | `tools/replay.py` | Feed a recording through perception → fusion → behaviour with the motors stubbed; draws with `ui/overlay.py` |
-| `tools/tune_colors.py` | Sliders over recorded frames to set the colour values; prints them to paste into `config.py` |
+| `tools/tune_colors.py` | Guided screens (live camera or a recording): tap the yellow line, the road and the PAUSE red to set the colour values, fine-tune, APPLY writes `config.py` |
 | `tools/calibrate.py` | Maths and command line for the front camera calibration (fit, check, lens) from photos of a chessboard at measured spots; computes `FRONT_BANDS``  and FRONT_GROUND_H (side camera values to be added with the side camera build) ` |
 | `tools/calib_ui.py` | Guided calibration on the 7" display: board session, --check (pre-session) and --lens, with live board detection, per-board hints and APPLY. Prints a short note at every step (Front camera calibration) |
 | `tools/config_writer.py` | Writes measured values into config.py for APPLY / --apply: only the named assignments change, comments kept, config.py.bak backup, checked to parse first |
@@ -841,7 +841,7 @@ Every block can be tested without the robot moving, by replaying recorded runs; 
 | IMU CHECK | `imu_drift_test.py` (sign check) | terminal |
 | RECORD | `record.py --seconds 20` | terminal |
 | LENS STEP | `calib_ui.py --lens` | guided |
-| TUNE COLOURS (or UI DEMO when there is no recording) | `tune_colors.py <newest recording>` / `ui_demo.py` | desktop window / display |
+| TUNE COLOURS | `tune_colors.py` (live camera) | guided |
 
 Screen tools take the display over and the menu comes back when they finish. Terminal tools keep the menu up with a STOP button (or Space / Esc) that sends them Ctrl-C; their output stays in the terminal. The menu re-reads config.py when a tool returns, so anything it APPLYed shows at once.
 

@@ -163,6 +163,19 @@ def test_usb_exposure_round_trip(usb):
     assert usb.get_exposure() == (5000, 10)
 
 
+def test_usb_wide_capture_is_shrunk(monkeypatch):
+    class Wide(FakeCapture):
+        def read(self):
+            return True, np.full((768, 1024, 3), 90, np.uint8)
+    monkeypatch.setattr(camera.cv2, "VideoCapture", Wide)
+    src = UsbSource("/dev/v4l/by-id/fake", (320, 240), "MJPG", config, (1024, 768))
+    src.open()
+    p = src.cap.props
+    assert (p[cv2.CAP_PROP_FRAME_WIDTH], p[cv2.CAP_PROP_FRAME_HEIGHT]) == (1024, 768)
+    img = src.read()
+    assert img.shape == (240, 320, 3) and int(img[0, 0, 0]) == 90
+
+
 def test_usb_requires_device_path():
     with pytest.raises(ValueError):
         UsbSource(None, (320, 240), "YUYV", config).open()

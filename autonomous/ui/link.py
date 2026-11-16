@@ -1,4 +1,5 @@
-"""Main-process side of the display: start it, build packets, send, read taps.
+"""Main-process side of the operator process: start it, build packets, send,
+read commands (taps, keys and PS5 buttons).
 
 Nothing here can block or crash the control loop because of the display:
 send() drops the packet when the one-slot queue is full, read_commands()
@@ -11,7 +12,9 @@ import queue
 from robot_types import UiCommand, UiPacket
 from ui.screen import run_ui
 
-_MAIN_COMMANDS = (UiCommand.START, UiCommand.STOP)    # NEXT_VIEW stays in the UI
+# Commands the control loop acts on; NEXT_VIEW stays in the UI.
+_MAIN_COMMANDS = (UiCommand.START, UiCommand.STOP, UiCommand.MODE_DRIVE,
+                  UiCommand.MODE_INTERSECTION, UiCommand.MODE_SIGNS)
 
 
 def start_ui(cfg):
@@ -38,15 +41,17 @@ def stop_ui(process, cfg):
 
 
 def make_ui_packet(sys, now, drive, motor, lane, road_yaw, imu, sign_vote, fps, overruns,
-                   warnings, front, side, include_views):
-    # Arguments in UiPacket field order (state and stop_reason come from
-    # sys.behaviour). Numbers every loop; camera results (with their views)
-    # only when include_views, so images go every UI_IMAGE_EVERY loops.
+                   warnings, front, side, include_views, location=None):
+    # Arguments in UiPacket field order (state, stop_reason and mode come
+    # from sys.behaviour). Numbers every loop; camera results (with their
+    # views) only when include_views, so images go every UI_IMAGE_EVERY
+    # loops. location: the LocationObs in QUIZ_INTERSECTION, else None.
     return UiPacket(
         t=now, state=sys.behaviour.state, stop_reason=sys.behaviour.stop_reason,
         drive=drive, motor=motor, lane=lane, road_yaw=road_yaw, imu=imu, sign_vote=sign_vote,
         fps=dict(fps), overruns=overruns, warnings=tuple(warnings),
         front=front if include_views else None, side=side if include_views else None,
+        mode=sys.behaviour.mode, location=location,
     )
 
 
@@ -59,7 +64,7 @@ def send(packet_q, packet):
 
 
 def read_commands(cmd_q):
-    # Every UI command waiting, without blocking: START and STOP only.
+    # Every UI command waiting, without blocking: START, STOP and the modes.
     out = []
     while True:
         try:

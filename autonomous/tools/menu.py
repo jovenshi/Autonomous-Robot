@@ -14,7 +14,6 @@ the terminal. Changes a tool APPLYs to config.py show up when the menu
 returns.
 """
 import argparse
-import glob
 import importlib
 import os
 import signal
@@ -51,9 +50,8 @@ class Tool:
 
 
 def tools_list(cfg):
-    # The tiles, in order. Tune colours needs a recording to open.
-    recordings = sorted(glob.glob(os.path.join(AUTONOMOUS_DIR, "recordings", "front_*")))
-    items = [
+    # The tiles, in order.
+    return [
         Tool("drive", "DRIVE", "main.py", ["main.py"], cfg.UI_ENABLED),
         Tool("check", "CAMERA CHECK", "2 min, before driving",
              ["-m", "tools.calib_ui", "--check"], True),
@@ -63,14 +61,9 @@ def tools_list(cfg):
         Tool("record", "RECORD", "20 s of camera, terminal",
              ["-m", "tools.record", "--seconds", "20"], False),
         Tool("lens", "LENS STEP", "optional", ["-m", "tools.calib_ui", "--lens"], True),
+        Tool("colours", "TUNE COLOURS", "when the light changes, 3 min",
+             ["-m", "tools.tune_colors"], True),
     ]
-    if recordings:
-        items.append(Tool("colours", "TUNE COLOURS", os.path.basename(recordings[-1]),
-                          ["-m", "tools.tune_colors", recordings[-1]], True))
-    else:
-        items.append(Tool("demo", "UI DEMO", "display only, 30 s",
-                          ["-m", "tools.ui_demo", "--seconds", "30"], True))
-    return items
 
 
 def status_lines(cfg):

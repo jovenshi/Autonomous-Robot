@@ -57,11 +57,10 @@ def test_unreadable_status_counts_as_not_run(tmp_path):
     assert calib_status.check_status(cfg, NOW)[0] is False
 
 
-def test_preflight_shows_the_camera_line_only_when_given():
+def test_preflight_leaves_the_camera_check_to_the_terminal():
     packet = bare_packet(imu=ImuSample(0.0, 0.0, True, 3, 0.0, 1.0), fps={"front": 30.0})
-    assert len(preflight(packet, config)) == 4
-    checks = dict(preflight(packet, config, (False, "camera check: not run yet")))
-    assert checks["camera check: not run yet"] is False
+    checks = preflight(packet, config)
+    assert len(checks) == 4 and not any("camera check" in label for label, _ in checks)
 
 
 # ---------------------------------------------------------------- menu

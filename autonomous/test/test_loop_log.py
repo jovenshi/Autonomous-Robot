@@ -14,7 +14,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import config  # noqa: E402
 from loop_log import COLUMNS, LoopLog
-from robot_types import DriveCmd, ImuSample, LaneEstimate, State
+from robot_types import (DriveCmd, ImuSample, LaneEstimate, LocationObs, RunMode,  # noqa: E402
+                         SignType, SignVote, State, Surface, Zone)
 
 START = datetime.datetime(2026, 10, 11, 15, 30, 5)
 
@@ -49,7 +50,7 @@ def test_rows_hold_the_loop_values(tmp_path):
     log.close()
     _, rows = read(log.path)
     assert rows[1] == ["12.3457", "LANE_FOLLOW", "0.012", "-0.03", "0.9",
-                       "4.5", "-12.25", "1", "-0.125", "0.7"]
+                       "4.5", "-12.25", "1", "-0.125", "0.7", "", "", "", "", "", "", "", ""]
 
 
 def test_missing_values_are_empty_cells(tmp_path):
@@ -59,8 +60,40 @@ def test_missing_values_are_empty_cells(tmp_path):
     log.write(1.1, State.LANE_FOLLOW, lane(), imu(valid=False), DriveCmd(speed=0.3, steer=0.0))
     log.close()
     _, rows = read(log.path)
-    assert rows[1] == ["1.0000", "LANE_FOLLOW", "", "", "0", "", "", "0", "0", "0.3"]
+    assert rows[1] == ["1.0000", "LANE_FOLLOW", "", "", "0", "", "", "0", "0", "0.3",
+                       "", "", "", "", "", "", "", ""]
     assert rows[2][7] == "0"                       # invalid sample: imu_valid 0
+
+
+def test_quiz_columns(tmp_path):
+    # Mode, zone, s (negative before the centre), source and the voted sign;
+    # zone, s and source empty with no junction pass under way.
+    loc = LocationObs(Zone.PAUSE, True, True, False, 0.25, 1.0, "dashes", 0.0)
+    no_pass = LocationObs(Zone.CONTINUE, False, False, False, None, 0.0, "none", 0.0)
+    log = LoopLog(str(tmp_path), config, start=START)
+    log.write(1.0, State.APPROACH, lane(), imu(), DriveCmd(0.3, 0.0), RunMode.QUIZ_INTERSECTION,
+              loc, SignVote(SignType.LEFT, None, 0.5))
+    log.write(1.1, State.IDLE, lane(), imu(), DriveCmd(0.0, 0.0), RunMode.DRIVE, no_pass, None,
+              Surface.ROAD)
+    log.close()
+    _, rows = read(log.path)
+    named = dict(zip(COLUMNS, rows[1]))
+    assert (named["mode"], named["zone"], named["s"], named["loc_source"], named["sign"]) == \
+        ("QUIZ_INTERSECTION", "PAUSE", "-0.25", "dashes", "LEFT")
+    assert rows[2][-8:] == ["DRIVE", "", "", "", "", "ROAD", "", ""]
+    assert named["side_surface"] == "" and named["side_edge"] == "" and named["side_err_m"] == ""
+
+
+def test_side_check_columns(tmp_path):
+    # The side camera's latest edge this pass and the estimate's error there.
+    loc = LocationObs(Zone.TURN, True, True, True, 0.1, 1.0, "side", 0.0,
+                      side_edge="ENTRY", side_error_m=0.042)
+    log = LoopLog(str(tmp_path), config, start=START)
+    log.write(1.0, State.CROSS, lane(), imu(), DriveCmd(0.3, 0.0), RunMode.QUIZ_INTERSECTION, loc)
+    log.close()
+    _, rows = read(log.path)
+    named = dict(zip(COLUMNS, rows[1]))
+    assert (named["side_edge"], named["side_err_m"]) == ("ENTRY", "0.042")
 
 
 def test_rows_are_buffered_until_close(tmp_path):

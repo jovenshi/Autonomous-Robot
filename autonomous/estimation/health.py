@@ -6,10 +6,13 @@ warning of their own; staleness is the safety check's job.
 from robot_types import HealthWarning as W
 
 
-def check_health(front, side, imu, lane, road_yaw, fps, overruns, motor_error, now, cfg):
+def check_health(front, side, imu, lane, road_yaw, fps, overruns, motor_error, now, cfg,
+                 vision_age=None):
     # fps: {'front': x, 'side': y} for the cameras that exist.
     # overruns: control-loop overruns in the recent window (not a lifetime total).
     # motor_error: SabertoothDriver.serial_error.
+    # vision_age: seconds since the newest VisionResult's frame (inf if the
+    # worker died), or None without a vision worker.
     checks = (
         (W.IMU_INVALID, _imu_invalid(imu, now, cfg)),
         (W.IMU_NOT_CALIBRATED, _imu_not_calibrated(imu)),
@@ -22,6 +25,7 @@ def check_health(front, side, imu, lane, road_yaw, fps, overruns, motor_error, n
         (W.LANE_CONF_LOW, _lane_conf_low(lane, cfg)),
         (W.LOOP_OVERRUN, overruns > 0),
         (W.MOTOR_SERIAL_ERROR, bool(motor_error)),
+        (W.VISION_STALE, vision_age is not None and vision_age > cfg.VISION_STALE_S),
     )
     return [warning for warning, failed in checks if failed]
 
@@ -45,8 +49,13 @@ def _road_yaw_stale(road_yaw, now, cfg):
     return not road_yaw.valid or now - road_yaw.t_anchor > cfg.ROAD_YAW_STALE_S
 
 
+def fps_min(name, cfg):
+    # The lowest acceptable frame rate for a camera ('front' or 'side').
+    return cfg.SIDE_CAM_FPS_MIN if name == "side" else cfg.CAM_FPS_MIN
+
+
 def _cam_fps_low(fps, cfg):
-    return any(rate < cfg.CAM_FPS_MIN for rate in fps.values())
+    return any(rate < fps_min(name, cfg) for name, rate in fps.items())
 
 
 def _brightness(front, side):

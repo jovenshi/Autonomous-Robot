@@ -1,7 +1,7 @@
 """Temporary lane drawing for the tools, until ui/overlay.py exists.
 
 When the display work starts, draw_front_overlay in ui/overlay.py replaces
-this module and tune_colors/replay switch to it.
+this module and replay switches to it (tune_colors already has).
 """
 import cv2
 

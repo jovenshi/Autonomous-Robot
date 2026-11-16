@@ -182,10 +182,35 @@ def test_lane_steer_keeps_inner_wheel_forward(no_smoothing):
     assert motors.left > 0 and motors.right > 0
 
 
-def test_turn_and_cross_not_wired_yet():
-    for state in (State.TURN, State.CROSS):
-        with pytest.raises(NotImplementedError):
-            drive_for_state(state, est(), None, None, LaneController(config), None, config)
+def test_turn_is_out_of_scope():
+    with pytest.raises(NotImplementedError):
+        drive_for_state(State.TURN, est(), None, None, LaneController(config), None, config)
+
+
+def test_cross_holds_the_road_direction():
+    # Robot 5 deg right of the road (yaw + = left): steer left, at CROSS_SPEED.
+    imu = ImuSample(-5.0, 0.0, True, 3, 0.0, 0.0)
+    road = RoadYaw(0.0, 0.0, True)
+    cmd = drive_for_state(State.CROSS, est(conf=0.0), imu, None, LaneController(config), None,
+                          config, road)
+    assert cmd.speed == config.CROSS_SPEED
+    assert cmd.steer == pytest.approx(hold_steer(-5.0, 0.0, config)) and cmd.steer > 0
+    for imu_, road_ in ((None, road), (imu, None), (imu, RoadYaw(0.0, 0.0, False)),
+                        (ImuSample(-5.0, 0.0, False, 3, 0.0, 0.0), road)):
+        cmd = drive_for_state(State.CROSS, est(), imu_, None, LaneController(config), None,
+                              config, road_)
+        assert cmd == DriveCmd(config.CROSS_SPEED, 0.0)
+
+
+def test_judging_pause_stops_every_moving_state(no_smoothing):
+    paused = types.SimpleNamespace(paused=True)
+    for state in (State.LANE_FOLLOW, State.APPROACH, State.CROSS, State.REACQUIRE):
+        cmd = drive_for_state(state, est(lateral=0.05), None, paused, LaneController(config),
+                              None, config)
+        assert cmd == DriveCmd(0.0, 0.0)
+    moving = types.SimpleNamespace(paused=False)
+    assert drive_for_state(State.APPROACH, est(), None, moving, LaneController(config), None,
+                           config).speed > 0
 
 
 # ---------------------------------------------------------------- mixer

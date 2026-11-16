@@ -17,6 +17,7 @@ from collections import deque
 import cv2
 import numpy as np
 
+from estimation.health import fps_min
 from robot_types import HealthWarning, State
 from ui.overlay import (AMBER, BLUE, GREEN, LINE, MUTED, PANEL, PURPLE, RED, TEXT, YELLOW, cm,
                         deg)
@@ -44,6 +45,55 @@ def draw_header(img, rect, packet):
     draw_text(img, f"{packet.drive.speed:.2f}", (x + w - 24, y + 52), 42, TEXT, bold=True,
               align="right")
     draw_text(img, "SPEED", (x + w - 24, y + 76), 13, MUTED, bold=True, align="right")
+
+
+def draw_banner(img, rect, packet, cfg):
+    # The run mode on every view ("Sign Reading", ...), and on the right
+    # the zone during a junction pass (intersection quiz), else the voted sign.
+    x, y, w, h = rect
+    img[y:y + h, x:x + w] = PANEL
+    cv2.line(img, (x, y + h - 1), (x + w, y + h - 1), LINE, 1)
+    if packet is None:
+        return
+    draw_text(img, cfg.MODE_LABELS[packet.mode.name], (x + 12, y + h - 9), 20, TEXT, bold=True)
+    zone = zone_label(packet, cfg)
+    if zone is not None:
+        draw_text(img, zone, (x + w - 12, y + h - 9), 20, YELLOW, bold=True, align="right")
+        return
+    vote = packet.sign_vote
+    if vote is not None:
+        draw_text(img, f"Sign: {cfg.SIGN_PHRASES[vote.sign.name]}", (x + w - 12, y + h - 9), 20,
+                  GREEN, bold=True, align="right")
+
+
+def zone_label(packet, cfg):
+    # "Zone: Turn zone" during a junction pass, else None.
+    loc = packet.location
+    if loc is None or loc.dist_to_centre_m is None:
+        return None
+    return f"Zone: {cfg.ZONE_PHRASES[loc.zone.name]}"
+
+
+def quiz_rows(packet, cfg):
+    vote = packet.sign_vote
+    rows = [("mode", cfg.MODE_LABELS[packet.mode.name], TEXT),
+            ("sign", cfg.SIGN_PHRASES[vote.sign.name] if vote is not None else "none",
+             GREEN if vote is not None else MUTED)]
+    loc = packet.location
+    if loc is None:
+        return rows
+    if loc.dist_to_centre_m is None:
+        return rows + [("zone", "no junction yet", MUTED)]
+    rows += [("zone", cfg.ZONE_PHRASES[loc.zone.name], YELLOW),
+             ("s (from centre)", f"{-loc.dist_to_centre_m:+.2f} m", TEXT),
+             ("location from", loc.source, TEXT),
+             ("location conf", f"{loc.conf:.2f}", TEXT if loc.conf >= 0.5 else AMBER)]
+    if loc.side_edge:
+        # The side camera's check: how far the estimate was off at its edge.
+        err = loc.side_error_m * 100
+        rows.append(("side check", f"{loc.side_edge.lower()} {err:+.1f} cm",
+                     TEXT if abs(err) <= cfg.SIDE_CHECK_OK_CM else AMBER))
+    return rows
 
 
 def draw_lane_gauge(img, rect, lane, cfg):
@@ -102,7 +152,7 @@ def draw_status(img, packet, cfg):
     # Every number, as label/value rows in two columns of sections.
     h, w = img.shape[:2]
     left = (("DRIVE", drive_rows(packet)), ("LANE", lane_rows(packet)),
-            ("ROAD YAW", road_yaw_rows(packet)))
+            ("ROAD YAW", road_yaw_rows(packet)), ("QUIZ", quiz_rows(packet, cfg)))
     right = (("IMU", imu_rows(packet)), ("HEALTH", health_rows(packet)),
              ("PRE-FLIGHT", [(label, "ok" if ok else "NO", GREEN if ok else RED)
                              for label, ok in preflight(packet, cfg)]))
@@ -173,20 +223,18 @@ def health_rows(packet):
 
 # ---------------------------------------------------------------- pre-flight
 
-def preflight(packet, cfg, camera=None):
+def preflight(packet, cfg):
     # Go/no-go list from the packet: [(label, ok)]. Informational only;
-    # Behaviour decides whether START is accepted. camera: (ok, text) from
-    # tools/calib_status.check_status, added last when given.
+    # Behaviour decides whether START is accepted. The camera calibration
+    # check is printed in the terminal only (main.py, startup_line).
     imu = packet.imu
     checks = [("IMU valid", imu is not None and imu.valid),
               ("gyro calibrated", imu is not None and imu.calib_gyro == 3)]
     for name, rate in sorted(packet.fps.items()):
-        checks.append((f"{name} camera {rate:.0f} fps", rate >= cfg.CAM_FPS_MIN))
+        checks.append((f"{name} camera {rate:.0f} fps", rate >= fps_min(name, cfg)))
     if not packet.fps:
         checks.append(("camera fps", False))
     checks.append(("motor serial", HealthWarning.MOTOR_SERIAL_ERROR not in packet.warnings))
-    if camera is not None:
-        checks.append((camera[1], camera[0]))
     return checks
 
 

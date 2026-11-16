@@ -11,7 +11,7 @@ Stop main.py first (it owns the camera), then from the autonomous/ folder:
     python -m tools.calib_ui --resume calibration/front_20261025_140000
 
 What you need: the robot on the course mat with the camera in its driving
-mount, a tape measure, tape, and the printed chessboard (9 x 6 inner corners).
+mount, a tape measure, tape, and the printed chessboard (CALIB_PATTERN inner corners).
 
 Board session, screen by screen:
     WELCOME   setup checklist; set the measured square size and road width

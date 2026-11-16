@@ -18,7 +18,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import config  # noqa: E402
-from robot_types import (DriveCmd, FrontLaneObs, FrontResult, HealthWarning, ImuSample,
+from robot_types import (RunMode, DriveCmd, FrontLaneObs, FrontResult, HealthWarning, ImuSample,
                          LaneEstimate, MotorCmd, RoadYaw, SideLaneObs, SideResult, State,
                          UiCommand, UiPacket)
 from tools.ui_demo import demo_packet, synthetic_front
@@ -251,7 +251,7 @@ def view_packet():
 
 class FakeSys:
     class behaviour:
-        state, stop_reason = State.LANE_FOLLOW, None
+        state, stop_reason, mode = State.LANE_FOLLOW, None, RunMode.QUIZ_SIGNS
 
 
 def test_make_ui_packet_views_only_when_asked():
@@ -299,8 +299,10 @@ def assert_send_under_1ms(times):
 
 @pytest.fixture
 def headless(monkeypatch):
-    # The display process inherits this: SDL draws to nothing, no window.
+    # The operator process inherits these: SDL draws to nothing, no window,
+    # and the announcer plays to nothing.
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
 
 
 def test_ui_process_runs_synthetic_packets_then_dies_unnoticed(headless):

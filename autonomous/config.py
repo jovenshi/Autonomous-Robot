@@ -23,27 +23,29 @@ LANE_LOST_TIMEOUT_S = 0.5       # s
 # ---------------------------------------------------------------- cameras and geometry
 
 FRONT_CAM_NUM = 0
-SIDE_CAM_DEVICE = None          # CONFIRM: your webcam's /dev/v4l/by-id/... path
-SIDE_CAM_FOURCC = "YUYV"
+SIDE_CAM_DEVICE = "/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._Webcam_Webcam-video-index0"
+SIDE_CAM_FOURCC = "MJPG"         # MEASURED 2026-11-15: this webcam gives YUYV at 3 fps (though it lists 30), MJPG at 19 fps
 FRONT_SIZE = (640, 480)
 FRONT_LANE_SIZE = (320, 240)
-SIDE_SIZE = (320, 240)
+SIDE_SIZE = (320, 240)          # the side frames everything downstream sees (SIDE_BOX is in these px)
+SIDE_CAPTURE_SIZE = (1024, 768) # MEASURED 2026-11-15: this webcam's 320x240 is a crop of the sensor; 1024x768 sees the whole sensor (about 3x wider) at the same 18.5 fps, shrunk to SIDE_SIZE
 FRONT_LENS_POSITION = 2.0       # dioptres (1 / focus distance in m); MEASURED; Camera Module 3 manual focus
 CAM_READ_RETRY_S = 0.01         # s; pause after a failed read before trying again
 CAM_FPS_WINDOW_S = 1.0          # s; window over which fps() is measured
 
-# MEASURED: 5 bands of (y_top, y_bottom, forward_m from the rear axle,
+# MEASURED: 7 bands of (y_top, y_bottom, forward_m from the rear axle,
 # half_road_px, m_per_px); y values in FRONT_LANE_SIZE pixels.
-# The first 2 bands are EXTRAPOLATED from the 5 measured ones (flat-floor
-# fit), not calibrated; redo tools/calibrate.py with --top-row to replace them.
+# From the 2026-11-15 15:24 board session (9 boards, 0.66-1.17 m, 5 x 4 corners,
+# 36.3 mm squares; 4 mm RMS). Bands 1 and 7 lie just outside the rows the boards
+# covered (extrapolated); bands 2-6 are measured.
 FRONT_BANDS = [
-    (91, 107, 1.6591, 52, 0.003004),
-    (112, 128, 1.3561, 63, 0.002453),
-    (133, 149, 1.1471, 75, 0.002073),
-    (154, 170, 0.9941, 86, 0.001795),
-    (175, 191, 0.8774, 98, 0.001583),
-    (196, 212, 0.7854, 110, 0.001415),
-    (217, 233, 0.7109, 121, 0.00128),
+    (91, 107, 1.2884, 64, 0.002372),
+    (112, 128, 1.0976, 77, 0.001981),
+    (133, 149, 0.9608, 90, 0.001701),
+    (154, 170, 0.8579, 102, 0.001491),
+    (175, 191, 0.7777, 115, 0.001326),
+    (196, 212, 0.7134, 128, 0.001195),
+    (217, 233, 0.6608, 140, 0.001087),
 ]
 
 SIDE_ROWS = (40, 80, 120, 160, 200)  # 5 rows spread over the side frame height
@@ -63,13 +65,17 @@ LANE_SEARCH_MIN_CONF = 0.5      # conf a fit needs before it sets the next windo
 LANE_OUTLIER_M = 0.015          # m; a band point missing the fit by more is dropped
 LANE_MIN_KEEP = 3               # band points always kept, however bad
 LANE_EDGE_WEIGHT = 0.5          # weight of a road-edge point (dash gap) vs a yellow point
-ROAD_WIDTH_M = 0.31             # m, edge to edge; MEASURED (matches the current FRONT_BANDS)
+ROAD_WIDTH_M = 0.305            # m, edge to edge; MEASURED (matches the current FRONT_BANDS)
 
 # MEASURED by tools/calib_ui.py (or tools/calibrate.py fit): written there on APPLY.
 # FRONT_GROUND_H maps FRONT_LANE_SIZE pixels (lens-corrected when the lens
 # values are set) to (forward_m, lateral_m) from the rear axle. Perception
 # uses FRONT_BANDS only; the homography is kept for the pre-session check.
-FRONT_GROUND_H = None           # MEASURED: 3 x 3 nested list
+FRONT_GROUND_H = [
+    [0.000831925, 0.019761384, 18.748112884],
+    [0.038363215, -0.00181753, -5.873573708],
+    [0.000894854, 0.15182491, 1.0],
+]
 FRONT_CAM_MATRIX = None         # MEASURED (lens step, optional): 3 x 3, FRONT_SIZE pixels
 FRONT_DIST_COEFFS = None        # MEASURED (lens step, optional): OpenCV distortion coefficients
 
@@ -78,8 +84,8 @@ FRONT_DIST_COEFFS = None        # MEASURED (lens step, optional): OpenCV distort
 CALIB_DIR = "calibration"       # relative to autonomous/; one folder per session
 CALIB_UI_HZ = 15                # Hz; guided screen redraw (live camera view)
 CALIB_STILL_PX = 1.5            # px; board corners moving less than this per frame count as still
-CALIB_SQUARE_M = 0.025          # m; MEASURED on your print (printers rescale)
-CALIB_PATTERN = (9, 6)          # inner corners (across, along); a 10 x 7-square board
+CALIB_SQUARE_M = 0.0363         # m; MEASURED on the printed docs/calibration_board.pdf (nominal 38 mm; printers rescale)
+CALIB_PATTERN = (5, 4)          # inner corners (across, along); a 6 x 5-square board (fills letter paper)
 CALIB_BAND_COUNT = 5
 CALIB_BAND_FILL = 0.75          # fraction of each band slot a band covers
 CALIB_MIN_FIT_BOARDS = 4        # board photos needed before a fit is allowed
@@ -88,10 +94,10 @@ CALIB_MIN_FIT_BOARDS = 4        # board photos needed before a fit is allowed
 # "check" photo is held back to verify it and becomes the taped check spot.
 # Slide a board until it is fully in view if needed and enter where it really is.
 CALIB_POSITIONS = (
-    (0.72, 0.00, "fit"), (0.72, -0.07, "fit"), (0.72, 0.07, "fit"),
-    (0.82, 0.00, "fit"), (0.92, 0.00, "fit"), (1.02, 0.00, "fit"),
-    (1.12, 0.00, "fit"), (1.12, -0.12, "fit"), (1.12, 0.12, "fit"),
-    (0.87, 0.05, "check"),
+    (0.66, 0.00, "fit"), (0.72, -0.08, "fit"), (0.72, 0.08, "fit"),
+    (0.85, 0.00, "fit"), (0.95, 0.00, "fit"), (1.05, 0.00, "fit"),
+    (1.15, 0.00, "fit"), (1.15, -0.10, "fit"), (1.15, 0.10, "fit"),
+    (0.88, 0.05, "check"),
 )
 CALIB_BOARD_RMS_WARN_M = 0.003  # m; a board fitting worse than this is flagged
 CALIB_BOARD_OFFSET_WARN_M = 0.004   # m; a board's mean miss this large suggests a mis-measured spot
@@ -99,7 +105,7 @@ CALIB_HOLDOUT_TOL_M = 0.005     # m; mean error on the held-back photo for a PAS
 CALIB_CHECK_TOL_M = 0.005       # m; mean error for the pre-session check to PASS
 CALIB_CHECK_MAX_AGE_H = 12      # h; an older PASS shows as "not checked" in the start-up checks
 CALIB_LENS_EDGE_RATIO = 2.0     # edge boards fitting this much worse than centre ones -> lens hint
-CALIB_CHECK_NEAR_M = None       # m; MEASURED: the taped check spot (set on APPLY)
+CALIB_CHECK_NEAR_M = None       # m; MEASURED: the taped check spot (set on APPLY); cleared: the 2026-11-15 spot read ~9 mm off (FAILED), retake the check photo
 CALIB_CHECK_LATERAL_M = None    # m; MEASURED: the taped check spot (set on APPLY)
 CALIB_LENS_MIN_PHOTOS = 12      # lens step: photos needed
 CALIB_LENS_MIN_CELLS = 7        # lens step: of the 3 x 3 image cells, how many corners must reach
@@ -130,12 +136,12 @@ BRIGHT_WARN_V = 220             # 0-255
 
 # ---------------------------------------------------------------- colour tests (TUNED)
 # From the test
-YELLOW_H_MIN = 21
-YELLOW_H_MAX = 30
-YELLOW_S_MIN = 116
-YELLOW_V_MIN = 72
-ROAD_S_MAX = 100
-ROAD_V_T_MIN = 51
+YELLOW_H_MIN = 0
+YELLOW_H_MAX = 34
+YELLOW_S_MIN = 132
+YELLOW_V_MIN = 70
+ROAD_S_MAX = 102
+ROAD_V_T_MIN = 93
 ROAD_V_T_MAX = 142
 
 GREEN_CHROM_MIN = 0.40          # G / (R+G+B)
@@ -144,28 +150,153 @@ DARK_SUM_MIN = 90               # R+G+B; below = too dark to judge
 WHITE_S_MAX = 50
 WHITE_V_REL = 0.8               # ratio of the frame's bright percentile
 WHITE_V_PCT = 95                # percentile
-RED_H_LOW_MAX = 10
+RED_H_LOW_MAX = 4
 RED_H_HIGH_MIN = 170
-RED_S_MIN = 100
+RED_S_MIN = 158
 
 # ---------------------------------------------------------------- junctions and signs
 
-APPROACH_ON = 0.6               # score; hysteresis with APPROACH_OFF
-APPROACH_OFF = 0.3
-CROSS_LINE_MIN_FRAC = 0.5       # fraction of width
-STOP_LINE_Y_FRAC = 0.85         # fraction of height
+CROSS_LINE_MIN_FRAC = 0.3       # fraction of width the crossing line's dashes cover once their gaps are closed; TUNED on the signs_* frames (0.32 at 1.6 m, 0.36-0.65 nearer)
+CROSS_ROAD_EXTRA_M = 0.15       # m; the road under the crossing line must be this much wider than ROAD_WIDTH_M (the cross road: +0.28 off-centre; our road with a seam: +0.06)
+CROSS_ROAD_CHECK_PX = 10        # px (lane size); rows either side of the crossing line that must be that road (a mat seam is 2-3)
+CROSS_LINE_CLOSE_PX = 61        # px (lane size, odd); dash gaps this wide are closed along a row
+CROSS_LINE_TILT_PX = 4          # px; rows searched either side, so a line tilted by the robot's yaw still counts
+CROSS_LINE_ROAD_PX = 7          # px (lane size); yellow counts for the crossing line only this close to road
+FLARE_STRIP_PX = 4              # px; rows per strip when measuring the road's width
+FLARE_CLOSE_PX = 7              # px (lane size); speckle holes in the road mask this size are closed before widths are measured
+FLARE_MIN_M = 0.10              # m; road this much wider than at the bottom of the view counts as widened; 0.06 fired on a yawed straight (straight_2) and a thick mat seam (straight_4)
+FLARE_WIDE_STRIPS = 3           # widened strips in a row needed (a mat seam is one strip)
+FLARE_NORMAL_STRIPS = 3         # strips at the bottom of the view whose median width is the normal road
+FLARE_BASE_MAX_M = 0.09         # m; the bottom of the view must be at most this much wider than ROAD_WIDTH_M (straights: +0.02-0.06; inside a corner: more)
+# Dash odometry (docs/quiz3_plan.md): how far the robot moved between two
+# frames, from how far our own line's dashes slid towards it. MEASURED on
+# junction_3: dash centres 0.115 m apart (dash ~0.045 m, gap ~0.07 m).
+DASH_LAB_B_MIN = 145            # Lab b* (128 = neutral) a dash pixel needs; MEASURED on junction_1-3 (dashes 150-220, road 121-132)
+DASH_WINDOW_M = 0.02            # m; yellow this close to the fitted lane line counts as our dash
+DASH_GAP_ROWS = 1               # rows; breaks this short inside a dash are bridged (far dashes fragment)
+DASH_LEN_MIN_M = 0.015          # m; shorter runs are specks
+DASH_LEN_MAX_M = 0.08           # m; longer runs are not one dash
+DASH_MAX_STEP_M = 0.05          # m; most a frame-to-frame move can be (under half the 0.115 m spacing)
+DASH_MAX_BACK_M = 0.01          # m; a match this far backwards is still taken as noise around 0
+DASH_MATCH_TOL_M = 0.012        # m; a dash matches when it moved within this of the shift
+DASH_MIN_MATCHES = 2            # dashes that must agree on the shift
+DASH_COLOUR = (60, 255, 120)    # BGR annotation colour of a dash centre
+CROSS_LINE_COLOUR = (0, 215, 255)   # BGR annotation colours: crossing line,
+FLARE_COLOUR = (230, 120, 255)      # where the road starts to widen
 SIDE_GREEN_MIN_FRAC = 0.2       # fraction
 SIGN_HZ = 10                    # Hz
-SIGN_SIDE = "right"             # CONFIRM
-SIGN_MIN_AREA_PX = 400          # px²
-SIGN_ASPECT_MIN = 0.6           # w / h
-SIGN_ASPECT_MAX = 1.6
-SIGN_RED_MIN_FRAC = 0.15        # fraction of crop
-OCTAGON_CORNERS = (7, 9)        # accepted corner count, inclusive
-ARROW_ASYM_MIN = 1.6            # wide end / narrow end
+# (x, y, w, h) in FRONT_LANE_SIZE px; a candidate's centre must lie inside.
+# The signs are front left of the robot (sign quiz, and the junction's far
+# left corner), so the left part of the view. None = whole view. Refine
+# from the sign recordings.
+SIGN_ROI = (0, 0, 176, 240)
+# A sign is a white card with a thin black outline around its symbol. The
+# outline is the candidate: a thin dark line (perception/color.mask_dark_lines)
+# whose convex hull is a rectangle of the outline's shape. Values in
+# FRONT_SIZE (full-frame) pixels, from the signs_* recordings of Nov 10:
+# outline aspect 1.24-1.61 (median 1.33), hull fill 0.86-0.99, ink 0.13-0.33.
+SIGN_LINE_KERNEL_PX = 13        # px; lines thinner than this count as thin
+SIGN_LINE_CONTRAST = 25         # grey levels a line must be darker than its surroundings
+SIGN_LINE_DILATE_PX = 3         # px; lines are thickened by this to bridge breaks (motion blur)
+SIGN_MIN_AREA_PX = 1600         # px²; smallest outline box
+SIGN_ASPECT_MIN = 1.1           # outline long side / short side
+SIGN_ASPECT_MAX = 1.7
+SIGN_FILL_MIN = 0.85            # the outline's hull area / its best-fit rectangle's area
+SIGN_INK_MAX = 0.4              # most of the box that may be line: an outline, not a dark patch
+SIGN_EDGE_PX = 2                # px; an outline this close to the search region's edge is cut off
+SIGN_BBOX_PAD_FRAC = 0.08       # the reported box grows by this fraction per side to take in the card's white margin
+SIGN_RED_MIN_FRAC = 0.15        # fraction of crop; a PAUSE needs this much red
+SIGN_CROP_PX = 64               # px (square); must match the model file
+SIGN_MARGIN_MIN = 0.5           # SVM margin; use the value tools/train_signs.py suggests
+SIGN_CLAHE_CLIP = 2.0           # clip limit
+SIGN_CLAHE_TILES = (4, 4)       # tile grid
+SIGN_HOG_BLOCK_PX = 16          # HOG block, stride, cell (px) and orientation bins; 1,764 values at 64 px.
+SIGN_HOG_STRIDE_PX = 8          # Written into the model file by train_signs.py; the Pi reads
+SIGN_HOG_CELL_PX = 8            # them back from the file, not from here.
+SIGN_HOG_BINS = 9
+SIGN_SVM_C = 1.0                # LinearSVC regularisation (tools/train_signs.py, laptop only)
+SIGN_AUG_COPIES = 10            # augmented copies per training crop (never flipped: a flipped LEFT is a RIGHT)
+SIGN_AUG_BRIGHT = 40            # +/- grey levels added
+SIGN_AUG_CONTRAST = 0.25        # +/- fraction of contrast change
+SIGN_AUG_ROT_DEG = 8            # +/- degrees
+SIGN_AUG_SCALE = 0.10           # +/- fraction
+SIGN_AUG_SHIFT_FRAC = 0.05      # +/- fraction of the crop size
+SIGN_AUG_BLUR_MAX_PX = 3        # Gaussian blur kernel up to this (odd px; 1 = none)
+SIGN_ROI_COLOUR = (255, 166, 88)   # BGR annotation colours: search region,
+SIGN_BOX_COLOUR = (80, 185, 63)    # a read sign,
+SIGN_NONE_COLOUR = (34, 153, 210)  # a candidate read as no sign
+SIGN_MODEL_PATH = "models/sign_svm.npz"   # relative to autonomous/; written by tools/train_signs.py
+SIGNS_DATA_DIR = "signs_data"   # relative to autonomous/; crops from tools/collect_signs.py
 SIGN_VOTES_NEEDED = 3           # frames
+SIGN_CLEAR_FRAMES = 5           # NONE results in a row before the voter drops its sign
+SIGN_BOX_FRAMES = 5             # recent boxes the voter reports the median of
 DEFAULT_ACTION = "STRAIGHT"     # name of an Action member
 STOP_HOLD_S = 3.0               # s
+
+# ---------------------------------------------------------------- location zones and quiz modes
+# s is the rear axle's distance along the road from the junction centre, in
+# metres, negative before the centre (docs/quiz3_plan.md).
+
+# Zones, as rear-axle s. READ_SIGN starts when the sign is cut off by the
+# edge of the front camera's view (estimation/location.py), at
+# READ_SIGN_LATEST_M if it never is. The others are MEASURED 2026-11-15 with
+# a tape on the mat (rear axle to the junction centre); on recordings/truth_1
+# the estimate was within 2 cm of the tape before the centre and 2-4 cm
+# behind it from 0 to +0.30.
+READ_SIGN_LATEST_M = -0.83      # m; READ_SIGN starts here if the sign was never seen leaving the view (10 cm earlier than -0.73: 2026-11-15, on the mat)
+# s at which each zone begins, in driving order: READ_SIGN, PAUSE, ENTERING, TURN, EXITING, CONTINUE.
+ZONE_BOUNDS_M = (READ_SIGN_LATEST_M, -0.65, -0.55, -0.20, 0.00, 0.30)   # EXITING 15 cm sooner than first measured (2026-11-15, on the mat)
+JUNCTION_CORNER_M = 0.28        # m before the centre where the road starts to widen into the rounded corners (course diagram; also the flare)
+ZONE_REF_X_M = 0.0              # m ahead of the rear axle of the point whose position decides the zone; 0 = the rear axle (the bounds above are written for it)
+SIGN_CUT_EDGE_PX = 8            # px (full frame); a sign box this close to the view's edge is being cut off
+SIGN_CUT_READINGS = 2           # sign readings in a row with no box, after one at the edge, that mean the sign is cut off
+FLARE_TO_CENTRE_M = 0.18        # m; MEASURED with tools/replay on junction_1-3 (medians 0.175, 0.195, 0.173): from where the flare test fires to the junction centre (it fires ~0.1 m past where the widening starts at ~0.28 m)
+ZONE_PAUSE_S = 2.0              # s stopped at each zone change, for the judge
+LOCATION_START_FRAMES = 3       # frames in a row with a camera fix before a junction pass begins
+LOCATION_PASS_END_M = 1.0       # m; s at which a pass ends and the tracker waits for the next junction (the quiz drives on in LANE_FOLLOW)
+LOCATION_DR_CONF_M = 0.5        # m travelled (dashes or learned speed) since the last camera fix at which LocationObs.conf reaches 0
+LOCATION_SPEED_FRAMES = 30      # frames of dash travel the learned speed (m/s per unit of speed command) is taken over
+LOCATION_SPEED_MIN_CMD = 0.05   # speed command below which a frame doesn't teach the speed (stopped, judging pause)
+LOCATION_BACK_MAX_M = 0.1       # m; a camera fix putting s further back than this in a pass is ignored (the robot only goes forward)
+START_MODE = "DRIVE"            # name of a RunMode member
+# Side camera (docs/quiz3_plan.md, stage 8; wide view since 2026-11-15).
+# The side camera looks out to the right, the robot's body along the bottom
+# of its image. Across SIDE_BOX, a band through the middle of the view, the
+# road fraction ramps up as the corner's grass slides out of view (0.5 at
+# -0.25 m) and down as the far side's grass slides in (0.5 at +0.12 m):
+# MEASURED on recordings/truth_2 against the tape (tools/side_fixes.py
+# --tape), each crossing a single clean step. The washed-out colours (grass:
+# green chromaticity 0.345, saturation ~20) mean the band is judged by the
+# road mask alone.
+SIDE_CAM_ENABLED = True         # start the side camera if it opens (main.py carries on without it)
+SIDE_BOX = (0, 100, 320, 40)    # (x, y, w, h) in SIDE_SIZE px: the band across the middle of the view
+SIDE_ROAD_MIN_FRAC = 0.6        # road fraction of the band shown and logged as ROAD
+SIDE_GRASS_MAX_FRAC = 0.2       # road fraction at or under which it is GRASS; between: mixed
+SIDE_EDGE_FRAC = 0.5            # the band's road fraction crossing this is an edge (between frames, interpolated)
+# Rear-axle s at the band's edges: ENTRY (rising: the corner's grass leaving
+# the view, just before TURN) and EXIT (falling: the far side's grass coming
+# in, between EXITING and CONTINUE).
+SIDE_EDGES_M = {"ENTRY": -0.25, "EXIT": 0.12}
+# On: each edge resets s once per pass (the dashes undercount 2-6 cm through
+# the junction: truth_1, truth_2). Off: the tracker still reports how far
+# off the estimate was at each edge (terminal, loop log, display).
+SIDE_FIXES_ENABLED = True
+SIDE_FIX_GATE_M = 0.10          # m; an edge further than this from where the estimate puts the robot is ignored (mat seams, shadows)
+LOCATION_HISTORY_FRAMES = 30     # front frames of (t, s) kept to find the estimate at a side edge's time (1 s at 30 fps)
+SIDE_EDGE_MAX_GAP_S = 0.1       # s; a side edge is used only with front frames this close around it (else the estimate then is unknown)
+SIDE_CHECK_OK_CM = 3.0          # cm; a side check off by more is shown amber on the display
+# tools/side_fixes.py --tape: the robot held still at tape spots
+SIDE_TAPE_STEP_M = 0.10         # m between tape spots
+SIDE_TAPE_STILL_M = 0.005       # m; dash odometry moving less than this counts as held still
+SIDE_TAPE_HOLD_S = 1.5          # s; held still at least this long is a tape spot
+SIDE_CAM_FPS_MIN = 15           # fps; the side webcam gives 19 fps in MJPG
+SIDE_ROAD_COLOUR = (90, 90, 90)     # BGR annotation colours of the box: road,
+SIDE_GRASS_COLOUR = (80, 185, 63)   # grass,
+SIDE_MIXED_COLOUR = (34, 153, 210)  # mixed
+VISION_WORKER_ENABLED = False   # False = location and sign work stay in the front camera thread
+VISION_STALE_S = 0.5            # s; newest VisionResult older than this -> VISION_STALE
+VISION_WAIT_S = 0.2             # s; the worker checks for a stop this often while no frame arrives
+VISION_STOP_TIMEOUT_S = 1.0     # s; shutdown waits this long for the worker before terminating it
 
 # ---------------------------------------------------------------- speeds and lane control
 
@@ -205,7 +336,7 @@ TURN_HANDOFF_CONF = 0.6         # conf
 VISION_TURN_STEER = 0.3         # steer
 TURN_TIMEOUT_S = 4.0            # s
 HOLD_KP = 0.01                  # steer per deg
-CROSS_TIMEOUT_S = 3.0           # s
+CROSS_TIMEOUT_S = 6.0           # s of driving (judging pauses not counted); CROSS spans 0.76 m (Entering to the end of Exiting), 3.2 s at the 0.235 m/s measured at CROSS_SPEED on 2026-11-15
 
 # ---------------------------------------------------------------- IMU and road yaw
 
@@ -279,7 +410,7 @@ UI_VIEW_STALE_S = 1.0           # s; a kept camera view older than this is greye
 UI_CHART_S = 5.0                # s; strip chart history (lateral error and steer)
 UI_CHART_LAT_M = 0.10           # m; lateral range (+/-) of the strip chart and the lane gauge
 UI_CHART_GAP_S = 0.3            # s; strip chart breaks the line across a gap this long
-UI_CMD_QUEUE_SIZE = 8           # commands; UI -> main queue (START / STOP taps)
+UI_CMD_QUEUE_SIZE = 8           # commands; UI -> main queue (taps, keys, PS5 buttons)
 UI_STOP_TIMEOUT_S = 1.0         # s; shutdown waits this long for the display process
 UI_START_VIEW = "drive"          # "drive", "camera" or "diagnostic"
 UI_FONT = "/usr/share/fonts/truetype/piboto/Piboto-Regular.ttf"
@@ -289,3 +420,39 @@ STATUS_PRINT_S = 1.0            # s; terminal status line interval (until the di
 LOOP_LOG_ENABLED = True         # one CSV row per control loop (loop_log.py)
 LOOP_LOG_DIR = "logs"            # relative to autonomous/; one file per run
 OVERRUN_WINDOW_S = 1.0          # s; overruns counted over this window for LOOP_OVERRUN
+
+# ---------------------------------------------------------------- operator: PS5 controller and audio
+# PS5_Controller.control_request key -> name of a UiCommand member, or
+# "START_STOP": START in IDLE and SAFE_STOP, STOP anywhere else (as the space bar).
+PS5_BUTTONS = {
+    "reqCross": "START_STOP",
+    "reqSquare": "MODE_SIGNS",
+    "reqTriangle": "MODE_INTERSECTION",
+    "reqCircle": "MODE_DRIVE",
+    "reqOptions": "NEXT_VIEW",
+}
+AUDIO_ENABLED = True
+AUDIO_VOLUME = 0.7              # 0-1
+AUDIO_DIR = "audio"             # relative to autonomous/; phrases rendered to WAV at start-up
+AUDIO_TTS_SCALE = 2.0           # text2wave -scale; as USB_SoundController.play_text_to_speech
+AUDIO_RENDER_TIMEOUT_S = 10.0   # s; one phrase's text2wave render at start-up
+AUDIO_GAP_S = 0.2               # s; silence between two queued phrases
+MODE_LABELS = {                 # RunMode name -> banner on every view
+    "DRIVE": "Drive",
+    "QUIZ_INTERSECTION": "Intersection Detection",
+    "QUIZ_SIGNS": "Sign Reading",
+}
+SIGN_PHRASES = {                # SignType name -> label shown and spoken
+    "LEFT": "Left",
+    "RIGHT": "Right",
+    "STRAIGHT": "Straight",
+    "PAUSE": "Pause",
+}
+ZONE_PHRASES = {                # Zone name -> label shown and spoken
+    "READ_SIGN": "Read the sign",
+    "PAUSE": "Pause zone",
+    "ENTERING": "Entering intersection",
+    "TURN": "Turn zone",
+    "EXITING": "Exiting intersection",
+    "CONTINUE": "Continue travel",
+}
